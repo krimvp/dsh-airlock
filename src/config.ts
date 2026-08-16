@@ -89,7 +89,14 @@ export const JSON_EXTENSIONS: readonly string[] = Object.freeze(['.json'])
 /** Policy file extensions read through the optional `js-yaml` peer. */
 export const YAML_EXTENSIONS: readonly string[] = Object.freeze(['.yml', '.yaml'])
 
-/** Tool name lists, as configured. An absent class keeps its built-in list. */
+/**
+ * Tool name lists, as configured.
+ *
+ * A class that is absent keeps its built-in list. A class that is present
+ * replaces its built-in list outright, including the `mcp__*` entry that covers
+ * every bridged server tool, so a configured list must name everything it means
+ * to cover. That is the cost of a policy an operator can read off the page.
+ */
 export interface ClassConfig {
   readonly egress?: readonly string[]
   readonly mutate?: readonly string[]
@@ -177,7 +184,7 @@ function fail(source: string, at: string, detail: string): never {
  */
 function describeType(value: unknown): string {
   if (value === null) return 'null'
-  if (value === undefined) return 'nothing'
+  if (value === undefined) return 'not set'
   if (Array.isArray(value)) return 'a list'
   return `a ${typeof value}`
 }

@@ -14,8 +14,19 @@
 import type { ToolExecution } from './dsh.js'
 import type { ContextLabel, Ledger } from './ledger.js'
 import { formatLabel } from './labels.js'
-import type { Capability, Rule } from './policy.js'
+import type { Capability, CapabilityClasses, Rule } from './policy.js'
 import { classify } from './policy.js'
+
+/** What the gate classifies with. */
+export interface GateOptions {
+  /**
+   * The class lists a tool is classified against. Defaults to the built-in
+   * classes. A deployment that reclassifies a tool in its policy must pass its
+   * own lists here, or the gate would judge the call against the wrong
+   * capability and silently permit what the policy meant to stop.
+   */
+  readonly classes?: CapabilityClasses
+}
 
 /** What the gate decided about one call. */
 export interface Decision {
@@ -66,8 +77,9 @@ export function evaluate(
   exec: ToolExecution,
   ledger: Ledger,
   rules: readonly Rule[],
+  options: GateOptions = {},
 ): Decision {
-  const capabilities = [...classify(exec.name)]
+  const capabilities = [...classify(exec.name, options.classes)]
   const sessionId = exec.agent?.id
   const session = sessionId === undefined ? undefined : ledger.peek(sessionId)
 

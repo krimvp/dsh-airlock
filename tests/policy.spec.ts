@@ -208,7 +208,7 @@ describe('rule compilation', () => {
     assert.equal(rule!.rationale, 'this workspace is air gapped')
   })
 
-  it('defaults the boundary to the tool call' , () => {
+  it('defaults the boundary to the tool call', () => {
     const [rule] = compileRules([{ when: { capability: 'egress' }, then: 'deny' }])
     assert.equal(rule!.boundary, 'tool')
   })

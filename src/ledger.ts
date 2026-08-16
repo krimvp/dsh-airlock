@@ -56,6 +56,56 @@ export interface ContextLabel {
 export interface LedgerOptions {
   /** Globs whose contents are `secret`. Defaults to {@link DEFAULT_SECRET_PATHS}. */
   readonly secretPaths?: readonly string[]
+  /** Tool name patterns whose results are `untrusted`. Defaults to the built-in list. */
+  readonly untrustedSources?: readonly string[]
+}
+
+/** What a tool result carries on its own, before inheritance. */
+export interface ResultLabel {
+  readonly label: Label
+  /** The secret glob that matched, when one did. */
+  readonly matchedGlob?: string
+  /** The path the call named, when it named one. */
+  readonly path?: string
+}
+
+/**
+ * The label a tool result carries, computed from the call that produced it.
+ *
+ * The gate at `tools/post-execute` runs before the `tool/result` event is
+ * appended, so it cannot ask the ledger for a label that does not exist yet.
+ * Both callers therefore share this one function, and a result is labelled the
+ * same whether it is being judged live or replayed from the log.
+ *
+ * @param name - the tool that produced the result.
+ * @param args - the parsed arguments of the call, when they are known.
+ * @param options - the secret globs and untrusted sources in force.
+ * @returns the intrinsic label, with the matched glob and path when relevant.
+ */
+export function resultLabelFor(
+  name: string,
+  args: Record<string, unknown> | undefined,
+  options: LedgerOptions = {},
+): ResultLabel {
+  const secretPaths = options.secretPaths ?? DEFAULT_SECRET_PATHS
+  const untrustedSources = options.untrustedSources
+
+  if (isUntrustedSource(name, untrustedSources)) {
+    return { label: { trust: 'untrusted', sensitivity: 'public' } }
+  }
+
+  const path = argumentPath(args)
+  if (path !== undefined) {
+    const matchedGlob = matchSecretPath(path, secretPaths)
+    if (matchedGlob !== undefined) {
+      return { label: { trust: 'workspace', sensitivity: 'secret' }, matchedGlob, path }
+    }
+  }
+
+  return {
+    label: { trust: 'workspace', sensitivity: 'public' },
+    ...path === undefined ? {} : { path },
+  }
 }
 
 /**
@@ -112,8 +162,11 @@ export class SessionLedger {
   /** Provenance for {@link evictionFloor}, when it is above bottom. */
   private evictionProvenance: Provenance | undefined
 
+  private readonly untrustedSources: readonly string[] | undefined
+
   constructor(options: LedgerOptions = {}) {
     this.secretPaths = options.secretPaths ?? DEFAULT_SECRET_PATHS
+    this.untrustedSources = options.untrustedSources
   }
 
   /**
@@ -262,31 +315,16 @@ export class SessionLedger {
       }
     }
 
-    if (isUntrustedSource(call.name)) {
-      return {
-        label: { trust: 'untrusted', sensitivity: 'public' },
-        provenance: { seq, description: `seq ${seq} (\`${call.name}\` result)` },
-      }
-    }
+    const resolved = resultLabelFor(call.name, call.args, {
+      secretPaths: this.secretPaths,
+      ...this.untrustedSources === undefined ? {} : { untrustedSources: this.untrustedSources },
+    })
 
-    const path = argumentPath(call.args)
-    if (path !== undefined) {
-      const matched = matchSecretPath(path, this.secretPaths)
-      if (matched !== undefined) {
-        return {
-          label: { trust: 'workspace', sensitivity: 'secret' },
-          provenance: {
-            seq,
-            description: `seq ${seq} (\`${call.name}\` read ${path}, matching ${matched})`,
-          },
-        }
-      }
-    }
+    const description = resolved.matchedGlob !== undefined
+      ? `seq ${seq} (\`${call.name}\` read ${resolved.path}, matching ${resolved.matchedGlob})`
+      : `seq ${seq} (\`${call.name}\` result)`
 
-    return {
-      label: { trust: 'workspace', sensitivity: 'public' },
-      provenance: { seq, description: `seq ${seq} (\`${call.name}\` result)` },
-    }
+    return { label: resolved.label, provenance: { seq, description } }
   }
 
   /**
