@@ -1,0 +1,55 @@
+{
+  "name": "dsh-airlock",
+  "version": "0.0.1",
+  "description": "Provenance-gated tool use for DeepSeek Harness (dsh) — labels every input, propagates the labels, and denies capabilities over labels instead of argument strings",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "tsc -p tsconfig.test.json && node --test \".test-build/tests/*.spec.js\"",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "security",
+    "prompt-injection",
+    "information-flow",
+    "provenance",
+    "taint",
+    "exfiltration",
+    "guard"
+  ],
+  "author": "Anton Balboa <anton.balboa@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/krimvp/dsh-airlock.git"
+  },
+  "bugs": {
+    "url": "https://github.com/krimvp/dsh-airlock/issues"
+  },
+  "homepage": "https://github.com/krimvp/dsh-airlock#readme",
+  "engines": {
+    "node": ">=20.6.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@types/node": "^20.19.43",
+    "typescript": "^5.6.0"
+  }
+}
