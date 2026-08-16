@@ -43,7 +43,30 @@
 import type { GenerateOptions, StreamChunk } from './dsh.js'
 import type { Label, Sensitivity, Trust } from './labels.js'
 import { formatLabel, sensitivityAtLeast, trustAtLeast } from './labels.js'
-import type { Ledger } from './ledger.js'
+import type { ContextLabel, Ledger } from './ledger.js'
+
+/**
+ * One rule this seam evaluates.
+ *
+ * A structural subset of the compiled `Rule` in `policy.ts`, declared locally so
+ * this module keeps deciding over a label predicate rather than over a policy
+ * object it would then have to interpret. A compiled rule is assignable to it.
+ */
+export interface BackstopRule {
+  /** The rule's stable id, quoted in the log line and in evidence. */
+  readonly id: string
+  /** Whether the session context label triggers the rule. */
+  readonly matches: (label: Label) => boolean
+  /**
+   * The axes the operator actually wrote, which decide which origin the refusal
+   * cites. A rule that names neither axis is answered by whichever origin the
+   * context has.
+   */
+  readonly when: {
+    readonly trust?: Trust
+    readonly sensitivity?: Sensitivity
+  }
+}
 
 /**
  * The policy bits the backstop reads.
@@ -59,11 +82,36 @@ export interface BackstopPolicy {
    */
   readonly enabled?: boolean
   /**
+   * The rules to evaluate, in authored order.
+   *
+   * When this list is present it decides, and {@link BackstopPolicy.sensitivity}
+   * and {@link BackstopPolicy.trust} are not read at all. The request is blocked
+   * when ANY rule matches, which is the same disjunction Gate A performs over an
+   * ordered list, and the first matching rule owns the refusal.
+   *
+   * The alternative — folding several rules into the single threshold pair below
+   * — cannot express what an operator wrote. Two rules constraining different
+   * axes have no common threshold: the most permissive pair that still fires for
+   * both is `trust=user, sensitivity=public`, which blocks every request in
+   * every session. Evaluating the rules is the only reading that both fires when
+   * a rule says so and stays silent when none does.
+   *
+   * A provider rule's `capability` axis is not read here, because this seam
+   * carries no tool call. Compiling one authored rule per capability class
+   * therefore yields duplicate label predicates at this seam, and a disjunction
+   * over duplicates is the predicate itself.
+   */
+  readonly rules?: readonly BackstopRule[]
+  /**
    * Block when the session context sensitivity is at or above this level.
-   * Defaults to `secret` when the policy names neither axis.
+   * Defaults to `secret` when the policy names neither axis. Ignored when
+   * {@link BackstopPolicy.rules} is present.
    */
   readonly sensitivity?: Sensitivity
-  /** Block when the session context trust is at or above this level. */
+  /**
+   * Block when the session context trust is at or above this level. Ignored
+   * when {@link BackstopPolicy.rules} is present.
+   */
   readonly trust?: Trust
   /**
    * `true` subjects auxiliary calls to the backstop too. Defaults to `false`.
@@ -104,6 +152,49 @@ function refusalText(label: Label, from: string): string {
 }
 
 /**
+ * Name the event the refusal cites.
+ *
+ * The axis a rule constrained owns the explanation, exactly as it does in a
+ * denial message: a rule written over sensitivity is answered by the node that
+ * raised sensitivity, and one written over trust by the node that raised trust.
+ *
+ * @param context - the session context label and its origins.
+ * @param bySensitivity - whether the sensitivity axis is the one that fired.
+ * @returns the origin description, or a fallback naming the context itself.
+ */
+function originFrom(context: ContextLabel, bySensitivity: boolean): string {
+  const origin = bySensitivity
+    ? context.sensitivityOrigin ?? context.trustOrigin
+    : context.trustOrigin ?? context.sensitivityOrigin
+  return origin === undefined ? 'this session\'s context' : origin.description
+}
+
+/**
+ * Evaluate a rule list against one session context label.
+ *
+ * Any rule that matches blocks, and the first one to match owns the refusal.
+ * That is the same first-match-wins reading of one ordered list that Gate A and
+ * the ask seam perform, so the operator reads the list once.
+ *
+ * @param rules - the provider rules, in authored order.
+ * @param context - the session context label and its origins.
+ * @returns the decision, whose `reason` is present only when it blocks.
+ */
+function decideByRules(
+  rules: readonly BackstopRule[],
+  context: ContextLabel,
+): BackstopDecision {
+  for (const rule of rules) {
+    if (!rule.matches(context.label)) continue
+    return {
+      blocked: true,
+      reason: refusalText(context.label, originFrom(context, rule.when.sensitivity !== undefined)),
+    }
+  }
+  return PASS
+}
+
+/**
  * Decide whether one assembled request may reach the provider.
  *
  * Pure, and readable without an async iterable. Every path abstains unless the
@@ -136,18 +227,21 @@ export function shouldBlockRequest(
   const session = ledger.peek(sessionId)
   if (session === undefined) return PASS
 
+  const context = session.contextLabel()
+
+  // A rule list is what the operator wrote, so it decides on its own terms.
+  const rules = policy.rules
+  if (rules !== undefined) return decideByRules(rules, context)
+
   const trust = policy.trust
   const sensitivity = policy.sensitivity ?? (trust === undefined ? 'secret' : undefined)
   if (trust === undefined && sensitivity === undefined) return PASS
 
-  const context = session.contextLabel()
   const bySensitivity = sensitivity !== undefined && sensitivityAtLeast(context.label, sensitivity)
   const byTrust = trust !== undefined && trustAtLeast(context.label, trust)
   if (!bySensitivity && !byTrust) return PASS
 
-  const origin = bySensitivity ? context.sensitivityOrigin : context.trustOrigin
-  const from = origin === undefined ? 'this session\'s context' : origin.description
-  return { blocked: true, reason: refusalText(context.label, from) }
+  return { blocked: true, reason: refusalText(context.label, originFrom(context, bySensitivity)) }
 }
 
 /**

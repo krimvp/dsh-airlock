@@ -32,6 +32,7 @@ import { extname, resolve } from 'node:path'
 import { expandHome } from './evidence.js'
 import type { Sensitivity, Trust } from './labels.js'
 import type {
+  BackstopSettings,
   Boundary,
   Capability,
   CapabilityClasses,
@@ -41,6 +42,7 @@ import type {
   RuleCondition,
   RuleSpec,
 } from './policy.js'
+import type { PreStepPolicy, PreStepRejection } from './prestep.js'
 import {
   BOUNDARIES,
   CAPABILITIES,
@@ -78,7 +80,23 @@ export const CONFIG_KEYS: readonly string[] = Object.freeze([
   'rules',
   'declassify',
   'evidence',
+  'preStep',
+  'backstop',
 ])
+
+/** Every key the `preStep` section admits. */
+export const PRE_STEP_KEYS: readonly string[] = Object.freeze([
+  'secretProducers',
+  'untrustedProducers',
+  'redactAtOrAbove',
+  'reject',
+])
+
+/** Every key `preStep.reject` admits. */
+export const PRE_STEP_REJECT_KEYS: readonly string[] = Object.freeze(['trust', 'sensitivity'])
+
+/** Every key the `backstop` section admits. */
+export const BACKSTOP_KEYS: readonly string[] = Object.freeze(['auxiliary'])
 
 /** The capability classes a tool can be assigned to by name. */
 export const ASSIGNABLE_CLASSES: readonly string[] = Object.freeze(['egress', 'mutate'])
@@ -114,6 +132,36 @@ export interface EvidenceConfig {
 }
 
 /**
+ * Gate B, the entering-message gate, as configured.
+ *
+ * This is the section that makes `agent/pre-step` reachable from a policy file.
+ * Every field is optional and every default is inert: nothing classifies as
+ * secret, and the gate never rejects a step, until an operator says otherwise.
+ *
+ * `secretProducers` and `untrustedProducers` are producer name patterns, in the
+ * same vocabulary the capability class lists use — a plain name, or a name with
+ * a trailing `*`. A producer is a plugin name for plugin-sourced content, and
+ * the message kind otherwise. That is classification data about producers,
+ * evaluated before any content exists, in the same sense as a secret path glob.
+ */
+export interface PreStepConfig {
+  readonly secretProducers?: readonly string[]
+  readonly untrustedProducers?: readonly string[]
+  readonly redactAtOrAbove?: Sensitivity
+  readonly reject?: PreStepRejection
+}
+
+/** The provider backstop, as configured. */
+export interface BackstopConfig {
+  /**
+   * `true` subjects auxiliary model calls to the backstop too. There is no
+   * `enabled` key: what arms the backstop is a `provider` boundary `redact`
+   * rule, so that the rule an operator reads is the rule that fires.
+   */
+  readonly auxiliary?: boolean
+}
+
+/**
  * One validated configuration layer.
  *
  * Every field is optional, because a layer states only what it changes. A field
@@ -131,6 +179,8 @@ export interface PolicyConfig {
   readonly rules?: readonly RuleSpec[]
   readonly declassify?: DeclassifyConfig
   readonly evidence?: EvidenceConfig
+  readonly preStep?: PreStepConfig
+  readonly backstop?: BackstopConfig
 }
 
 /** How a policy is loaded. Every field is a seam a test can substitute. */
@@ -477,6 +527,123 @@ function validateClasses(value: unknown, source: string, at: string): ClassConfi
 }
 
 /**
+ * Validate `preStep.reject`.
+ *
+ * A rejection that names neither axis is refused rather than accepted. A
+ * `when: {}` on a rule is accepted because it applies to everything, which is
+ * the broad reading; a `reject: {}` is the opposite — it fires for nothing —
+ * and an operator who wrote one has configured a control that cannot act.
+ *
+ * @param value - the configured rejection.
+ * @param source - which layer it came from.
+ * @param at - where in that layer.
+ * @returns the validated rejection.
+ */
+function validatePreStepRejection(value: unknown, source: string, at: string): PreStepRejection {
+  const raw = requireObject(value, source, at)
+  requireKeys(
+    raw,
+    PRE_STEP_REJECT_KEYS,
+    source,
+    at,
+    ' Rejection reads the session context label and nothing else. There is no key'
+    + ' for a message body, because a model can rewrite one.',
+  )
+
+  const rejection: { trust?: Trust; sensitivity?: Sensitivity } = {}
+  if (raw.trust !== undefined) {
+    rejection.trust = requireEnum(raw.trust, TRUST_LEVELS, source, `${at}.trust`, 'a trust level')
+  }
+  if (raw.sensitivity !== undefined) {
+    rejection.sensitivity = requireEnum(
+      raw.sensitivity,
+      SENSITIVITY_LEVELS,
+      source,
+      `${at}.sensitivity`,
+      'a sensitivity level',
+    )
+  }
+  if (rejection.trust === undefined && rejection.sensitivity === undefined) {
+    fail(
+      source,
+      at,
+      'names neither `trust` nor `sensitivity`, so it would never reject a step. Name the axis '
+      + 'the step must not run at, or remove the key.',
+    )
+  }
+  return rejection
+}
+
+/**
+ * Validate the `preStep` section.
+ * @param value - the configured section.
+ * @param source - which layer it came from.
+ * @param at - where in that layer.
+ * @returns the validated section, holding only the keys it actually set.
+ */
+function validatePreStep(value: unknown, source: string, at: string): PreStepConfig {
+  const raw = requireObject(value, source, at)
+  requireKeys(raw, PRE_STEP_KEYS, source, at)
+
+  const preStep: {
+    secretProducers?: readonly string[]
+    untrustedProducers?: readonly string[]
+    redactAtOrAbove?: Sensitivity
+    reject?: PreStepRejection
+  } = {}
+
+  if (raw.secretProducers !== undefined) {
+    preStep.secretProducers = requireStringArray(
+      raw.secretProducers,
+      source,
+      `${at}.secretProducers`,
+    )
+  }
+  if (raw.untrustedProducers !== undefined) {
+    preStep.untrustedProducers = requireStringArray(
+      raw.untrustedProducers,
+      source,
+      `${at}.untrustedProducers`,
+    )
+  }
+  if (raw.redactAtOrAbove !== undefined) {
+    preStep.redactAtOrAbove = requireEnum(
+      raw.redactAtOrAbove,
+      SENSITIVITY_LEVELS,
+      source,
+      `${at}.redactAtOrAbove`,
+      'a sensitivity level',
+    )
+  }
+  if (raw.reject !== undefined) {
+    preStep.reject = validatePreStepRejection(raw.reject, source, `${at}.reject`)
+  }
+  return preStep
+}
+
+/**
+ * Validate the `backstop` section.
+ * @param value - the configured section.
+ * @param source - which layer it came from.
+ * @param at - where in that layer.
+ * @returns the validated section.
+ */
+function validateBackstop(value: unknown, source: string, at: string): BackstopConfig {
+  const raw = requireObject(value, source, at)
+  requireKeys(
+    raw,
+    BACKSTOP_KEYS,
+    source,
+    at,
+    ' The backstop is armed by a rule with `boundary: provider` and `then: redact`,'
+    + ' not by a switch here.',
+  )
+  return raw.auxiliary === undefined
+    ? {}
+    : { auxiliary: requireBoolean(raw.auxiliary, source, `${at}.auxiliary`) }
+}
+
+/**
  * Validate one configuration layer.
  *
  * @param value - the layer, exactly as it was parsed.
@@ -503,6 +670,8 @@ export function validateConfig(
     rules?: readonly RuleSpec[]
     declassify?: DeclassifyConfig
     evidence?: EvidenceConfig
+    preStep?: PreStepConfig
+    backstop?: BackstopConfig
   } = {}
 
   if (raw.posture !== undefined) {
@@ -540,6 +709,12 @@ export function validateConfig(
   }
   if (raw.evidence !== undefined) {
     config.evidence = validateEvidence(raw.evidence, source, `${at}.evidence`)
+  }
+  if (raw.preStep !== undefined) {
+    config.preStep = validatePreStep(raw.preStep, source, `${at}.preStep`)
+  }
+  if (raw.backstop !== undefined) {
+    config.backstop = validateBackstop(raw.backstop, source, `${at}.backstop`)
   }
 
   return config
@@ -621,9 +796,11 @@ function mergeSection<T extends object>(base: T | undefined, override: T | undef
  * replaces a list rather than extending it: an operator reviewing a diff should
  * be able to read the effective list off the page, and a silent union would
  * also make a class impossible to narrow. The three sections that hold
- * independent switches — `classes`, `declassify`, and `evidence` — merge one
- * key at a time, so setting `classes.egress` leaves the built-in `mutate` list
- * in place.
+ * independent switches — `classes`, `declassify`, `evidence`, `preStep`, and
+ * `backstop` — merge one key at a time, so setting `classes.egress` leaves the
+ * built-in `mutate` list in place. That merge is one level deep: a `preStep`
+ * layer that sets `reject` replaces the whole `reject` mapping below it, for the
+ * same reason a list replaces a list.
  *
  * @param base - the lower layer.
  * @param override - the higher layer.
@@ -633,12 +810,16 @@ export function mergeConfigs(base: PolicyConfig, override: PolicyConfig): Policy
   const classes = mergeSection(base.classes, override.classes)
   const declassify = mergeSection(base.declassify, override.declassify)
   const evidence = mergeSection(base.evidence, override.evidence)
+  const preStep = mergeSection(base.preStep, override.preStep)
+  const backstop = mergeSection(base.backstop, override.backstop)
   return {
     ...base,
     ...override,
     ...classes === undefined ? {} : { classes },
     ...declassify === undefined ? {} : { declassify },
     ...evidence === undefined ? {} : { evidence },
+    ...preStep === undefined ? {} : { preStep },
+    ...backstop === undefined ? {} : { backstop },
   }
 }
 
@@ -660,6 +841,25 @@ export function resolvePolicy(config: PolicyConfig = {}): Policy {
     egress: config.classes?.egress ?? DEFAULT_CLASSES.egress,
     mutate: config.classes?.mutate ?? DEFAULT_CLASSES.mutate,
   }
+  const preStepConfig = config.preStep
+  // Every field is conditionally spread, because `exactOptionalPropertyTypes`
+  // distinguishes an absent field from one set to `undefined`, and Gate B reads
+  // an absent field as its inert default.
+  const preStep: PreStepPolicy = preStepConfig === undefined ? {} : {
+    ...preStepConfig.secretProducers === undefined
+      ? {}
+      : { secretProducers: preStepConfig.secretProducers },
+    ...preStepConfig.untrustedProducers === undefined
+      ? {}
+      : { untrustedProducers: preStepConfig.untrustedProducers },
+    ...preStepConfig.redactAtOrAbove === undefined
+      ? {}
+      : { redactAtOrAbove: preStepConfig.redactAtOrAbove },
+    ...preStepConfig.reject === undefined ? {} : { reject: preStepConfig.reject },
+  }
+  const backstop: BackstopSettings = {
+    auxiliary: config.backstop?.auxiliary ?? DEFAULT_POLICY.backstop.auxiliary,
+  }
 
   return {
     posture: config.posture ?? DEFAULT_POLICY.posture,
@@ -674,6 +874,8 @@ export function resolvePolicy(config: PolicyConfig = {}): Policy {
       jsonl: jsonl === undefined ? DEFAULT_POLICY.evidence.jsonl : jsonl !== false,
       path: typeof jsonl === 'string' ? expandHome(jsonl) : DEFAULT_POLICY.evidence.path,
     },
+    preStep,
+    backstop,
   }
 }
 

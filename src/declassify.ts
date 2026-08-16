@@ -36,6 +36,9 @@ export const DEFAULT_MAX_GRANTS = 16
 /** How many sessions the store remembers before it forgets the oldest. */
 export const DEFAULT_MAX_SESSIONS = 1_024
 
+/** How many unanswered asks the correlator remembers, across every session. */
+export const DEFAULT_MAX_PENDING_ASKS = 64
+
 /**
  * What a grant covers.
  *
@@ -402,6 +405,221 @@ export class Declassifier implements DeclassificationLookup {
     } catch {
       return undefined
     }
+  }
+}
+
+/** The durable log-only event the approval seam appends when it raises a question. */
+export const APPROVAL_ASKED_EVENT = 'approval/asked'
+
+/** The durable log-only event the approval seam appends when a question is answered. */
+export const APPROVAL_DECIDED_EVENT = 'approval/decided'
+
+/** The outcome that clears a label. Every other outcome leaves the rule standing. */
+export const APPROVAL_GRANTED_OUTCOME = 'allowed-once'
+
+/**
+ * One question this plugin raised, held until its answer arrives.
+ *
+ * The fields are everything a grant and its evidence record need, captured at
+ * the instant the question was asked. The label in particular is the label the
+ * human was shown in the approval message, which is the label they cleared.
+ */
+export interface AirlockAsk {
+  /** The session the question belongs to. */
+  readonly sessionId: string
+  /** The tool the question was about. */
+  readonly tool: string
+  /** The call the question was about. */
+  readonly callId: string
+  /** The capability class the rule that asked governs. */
+  readonly capability: Capability
+  /** Every capability class the tool belongs to, for the evidence record. */
+  readonly capabilities: readonly Capability[]
+  /** The context label at the moment the question was asked. */
+  readonly label: Label
+  /** The exact reason string this plugin handed the harness. */
+  readonly reason: string
+  /** The rule that asked, by its stable id. */
+  readonly rule?: string
+}
+
+/** How the correlator is bounded. */
+export interface AskCorrelatorOptions {
+  /**
+   * How many unanswered asks are remembered across every session. Defaults to
+   * {@link DEFAULT_MAX_PENDING_ASKS}.
+   */
+  readonly maxPending?: number
+}
+
+/**
+ * Read a value as a plain mapping.
+ * @param value - the event data, which arrives typed as `unknown`.
+ * @returns the mapping, or `undefined` when the value is not one.
+ */
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  return value as Record<string, unknown>
+}
+
+/**
+ * Read one non-empty string field out of event data.
+ * @param raw - the event data as a mapping.
+ * @param name - the field to read.
+ * @returns the value, or `undefined` when it is absent or not a non-empty string.
+ */
+function stringField(raw: Record<string, unknown> | undefined, name: string): string | undefined {
+  const value = raw?.[name]
+  return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
+/** The separator that makes a composite map key unambiguous. */
+const KEY_SEPARATOR = ' '
+
+/**
+ * Compose a session-scoped map key.
+ * @param sessionId - the session.
+ * @param id - the call id or approval id.
+ * @returns the composite key.
+ */
+function composeKey(sessionId: string, id: string): string {
+  return `${sessionId}${KEY_SEPARATOR}${id}`
+}
+
+/**
+ * Correlate an approval outcome back to the question this plugin raised.
+ *
+ * The plugin never sees an approval outcome as a return value: the harness
+ * services an `ask` through `ctx.approval` after the whole `tools/pre-execute`
+ * waterfall has run, and hands the result to the tool registry rather than to
+ * the asker. What the plugin does see is the durable pair the approval service
+ * appends to the session log, `approval/asked` and `approval/decided`, which
+ * reach the same `session/event` listener the ledger folds
+ * (verified against `packages/interaction/user-approval/src/index.ts` at
+ * 0.1.0-rc.5).
+ *
+ * ## Attribution
+ *
+ * The log carries every plugin's approvals, and an approval for another
+ * plugin's question must not clear an airlock label. Three facts have to agree
+ * before this correlator claims an `approval/asked` as its own:
+ *
+ * 1. its `callId` names a call this plugin returned `{kind:'ask'}` for, in this
+ *    session;
+ * 2. its `toolName` is the tool that ask was about;
+ * 3. its `reason` is byte-for-byte the reason string this plugin composed.
+ *
+ * The third is what closes the remaining gap. A listener ordered around this
+ * one can call `next()`, receive this plugin's `ask`, and return an ask of its
+ * own for the same call; the callId would then match a question a human
+ * answered on someone else's wording. Comparing the reason is an identity check
+ * on a string this plugin itself authored — it is not a predicate over model
+ * output or over an argument, and no decision is made from its content.
+ *
+ * Anything that fails to satisfy all three is simply not correlated, and an
+ * uncorrelated approval grants nothing. That direction is the safe one: the
+ * cost of failing to attribute is that the operator is asked again.
+ *
+ * The store is bounded on both maps and is dropped with its session, because a
+ * question nobody answered must not accumulate and a clearance must not outlive
+ * the session it was granted in.
+ */
+export class AskCorrelator {
+  private readonly maxPending: number
+
+  /** Asks raised but not yet seen on the log, keyed by session and call id. */
+  private readonly byCall = new Map<string, AirlockAsk>()
+
+  /** Asks seen on the log but not yet decided, keyed by session and approval id. */
+  private readonly byApproval = new Map<string, AirlockAsk>()
+
+  constructor(options: AskCorrelatorOptions = {}) {
+    this.maxPending = bound(options.maxPending, DEFAULT_MAX_PENDING_ASKS)
+  }
+
+  /**
+   * Record that this plugin asked about one call.
+   * @param ask - what was asked, and what a grant would cover.
+   */
+  raised(ask: AirlockAsk): void {
+    this.remember(this.byCall, composeKey(ask.sessionId, ask.callId), ask)
+  }
+
+  /**
+   * Claim an `approval/asked` event, when it is this plugin's question.
+   * @param sessionId - the session the event was appended to.
+   * @param data - the event's `data`, read defensively.
+   * @returns the ask it correlates to, or `undefined` when it is not ours.
+   */
+  asked(sessionId: string, data: unknown): AirlockAsk | undefined {
+    const raw = asRecord(data)
+    const id = stringField(raw, 'id')
+    const callId = stringField(raw, 'callId')
+    const toolName = stringField(raw, 'toolName')
+    if (id === undefined || callId === undefined || toolName === undefined) return undefined
+
+    const callKey = composeKey(sessionId, callId)
+    const ask = this.byCall.get(callKey)
+    if (ask === undefined) return undefined
+    if (ask.tool !== toolName) return undefined
+    if (stringField(raw, 'reason') !== ask.reason) return undefined
+
+    this.byCall.delete(callKey)
+    this.remember(this.byApproval, composeKey(sessionId, id), ask)
+    return ask
+  }
+
+  /**
+   * Take the ask one `approval/decided` answers.
+   *
+   * The entry is removed whatever the outcome was, because a question is asked
+   * once and answered once. The caller decides whether the outcome grants; a
+   * `rejected`, `cancelled`, or `unavailable` answer simply grants nothing.
+   *
+   * @param sessionId - the session the event was appended to.
+   * @param id - the approval request id the event names.
+   * @returns the ask, or `undefined` when this plugin did not raise it.
+   */
+  resolve(sessionId: string, id: string): AirlockAsk | undefined {
+    const key = composeKey(sessionId, id)
+    const ask = this.byApproval.get(key)
+    if (ask === undefined) return undefined
+    this.byApproval.delete(key)
+    return ask
+  }
+
+  /**
+   * Forget every pending ask of one session.
+   * @param sessionId - the session to forget.
+   */
+  drop(sessionId: string): void {
+    const prefix = `${sessionId}${KEY_SEPARATOR}`
+    for (const map of [this.byCall, this.byApproval]) {
+      for (const key of [...map.keys()]) {
+        if (key.startsWith(prefix)) map.delete(key)
+      }
+    }
+  }
+
+  /** @returns how many asks are currently pending. Exposed for tests. */
+  pendingCount(): number {
+    return this.byCall.size + this.byApproval.size
+  }
+
+  /**
+   * Store one entry, evicting the oldest once the map is at its cap.
+   * @param map - the map to store into.
+   * @param key - the composite key.
+   * @param ask - the entry.
+   */
+  private remember(map: Map<string, AirlockAsk>, key: string, ask: AirlockAsk): void {
+    map.delete(key)
+    while (map.size >= this.maxPending) {
+      const oldest = map.keys().next()
+      if (oldest.done === true) break
+      map.delete(oldest.value)
+    }
+    map.set(key, ask)
   }
 }
 

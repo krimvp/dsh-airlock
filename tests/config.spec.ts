@@ -542,3 +542,105 @@ describe('the merge order end to end', () => {
     assert.deepEqual((await loadPolicy()).rules, DEFAULT_POLICY.rules)
   })
 })
+
+describe('the preStep section', () => {
+  it('accepts the documented shape in full', () => {
+    const config = validateConfig({
+      preStep: {
+        secretProducers: ['vault', 'secrets-*'],
+        untrustedProducers: ['inbox'],
+        redactAtOrAbove: 'confidential',
+        reject: { trust: 'untrusted', sensitivity: 'secret' },
+      },
+    })
+    assert.deepEqual(config.preStep, {
+      secretProducers: ['vault', 'secrets-*'],
+      untrustedProducers: ['inbox'],
+      redactAtOrAbove: 'confidential',
+      reject: { trust: 'untrusted', sensitivity: 'secret' },
+    })
+  })
+
+  it('refuses a typo, and names the path it is at', () => {
+    const error = refusal({ preStep: { secretProducer: ['vault'] } })
+    assert.equal(error.at, 'airlock.preStep.secretProducer')
+    assert.match(error.message, /is not a key airlock knows/)
+    assert.match(
+      error.message,
+      /`secretProducers`, `untrustedProducers`, `redactAtOrAbove`, `reject`/,
+    )
+  })
+
+  it('refuses a typo inside the rejection, and says there is no key for a message', () => {
+    const error = refusal({ preStep: { reject: { sensitivty: 'secret' } } })
+    assert.equal(error.at, 'airlock.preStep.reject.sensitivty')
+    assert.match(error.message, /`trust`, `sensitivity`/)
+    assert.match(error.message, /no key for a message body/)
+  })
+
+  it('refuses an unknown sensitivity level', () => {
+    const error = refusal({ preStep: { redactAtOrAbove: 'very-secret' } })
+    assert.equal(error.at, 'airlock.preStep.redactAtOrAbove')
+    assert.match(error.message, /`public`, `confidential`, `secret`/)
+  })
+
+  it('refuses an unknown trust level in the rejection', () => {
+    const error = refusal({ preStep: { reject: { trust: 'unstrusted' } } })
+    assert.equal(error.at, 'airlock.preStep.reject.trust')
+    assert.match(error.message, /is not a trust level airlock knows/)
+  })
+
+  it('refuses a producer list that is not a list of strings', () => {
+    assert.equal(refusal({ preStep: { secretProducers: 'vault' } }).at, 'airlock.preStep.secretProducers')
+    assert.equal(refusal({ preStep: { untrustedProducers: [1] } }).at, 'airlock.preStep.untrustedProducers[0]')
+  })
+
+  it('refuses a rejection that would never fire', () => {
+    const error = refusal({ preStep: { reject: {} } })
+    assert.equal(error.at, 'airlock.preStep.reject')
+    assert.match(error.message, /would never reject a step/)
+  })
+
+  it('resolves onto the policy, and stays inert when it is absent', () => {
+    assert.deepEqual(resolvePolicy({}).preStep, {})
+    assert.deepEqual(resolvePolicy({ preStep: { secretProducers: ['vault'] } }).preStep, {
+      secretProducers: ['vault'],
+    })
+  })
+
+  it('leaves a key the layer did not set absent rather than undefined', () => {
+    const preStep = resolvePolicy({ preStep: { redactAtOrAbove: 'secret' } }).preStep
+    assert.equal(Object.hasOwn(preStep, 'secretProducers'), false)
+    assert.equal(Object.hasOwn(preStep, 'reject'), false)
+  })
+
+  it('merges one key at a time across layers', () => {
+    const merged = mergeConfigs(
+      { preStep: { secretProducers: ['vault'] } },
+      { preStep: { redactAtOrAbove: 'confidential' } },
+    )
+    assert.deepEqual(merged.preStep, {
+      secretProducers: ['vault'],
+      redactAtOrAbove: 'confidential',
+    })
+  })
+})
+
+describe('the backstop section', () => {
+  it('accepts and resolves the auxiliary switch', () => {
+    assert.deepEqual(validateConfig({ backstop: { auxiliary: true } }).backstop, { auxiliary: true })
+    assert.equal(resolvePolicy({ backstop: { auxiliary: true } }).backstop.auxiliary, true)
+    assert.equal(resolvePolicy({}).backstop.auxiliary, false)
+    assert.equal(resolvePolicy({}).backstop.auxiliary, DEFAULT_POLICY.backstop.auxiliary)
+  })
+
+  it('refuses a typo, and points at the rule that actually arms the backstop', () => {
+    const error = refusal({ backstop: { enabled: true } })
+    assert.equal(error.at, 'airlock.backstop.enabled')
+    assert.match(error.message, /`boundary: provider`/)
+  })
+
+  it('refuses a non-boolean auxiliary', () => {
+    assert.equal(refusal({ backstop: { auxiliary: 'yes' } }).at, 'airlock.backstop.auxiliary')
+  })
+})

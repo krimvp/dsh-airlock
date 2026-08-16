@@ -2,8 +2,9 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
 import type { GenerateOptions, SessionEvent, StreamChunk } from '../src/dsh.js'
-import type { BackstopPolicy } from '../src/backstop.js'
+import type { BackstopPolicy, BackstopRule } from '../src/backstop.js'
 import { backstopStream, refusalStream, shouldBlockRequest } from '../src/backstop.js'
+import { sensitivityAtLeast, trustAtLeast } from '../src/labels.js'
 import { Ledger } from '../src/ledger.js'
 
 const SESSION = 'session-1'
@@ -268,5 +269,94 @@ describe('the provider backstop, streaming', () => {
     assert.equal(down.called, false)
     assertValidStream(chunks)
     assert.match(String(chunks[1]?.['text']), /provider backstop failed: ledger unavailable/)
+  })
+})
+
+/** A rule as `compileRule` produces one, reduced to what this seam reads. */
+function rule(
+  id: string,
+  when: { trust?: 'user' | 'workspace' | 'untrusted'; sensitivity?: 'public' | 'confidential' | 'secret' },
+): BackstopRule {
+  return {
+    id,
+    when,
+    matches: (label) =>
+      (when.trust === undefined || trustAtLeast(label, when.trust))
+      && (when.sensitivity === undefined || sensitivityAtLeast(label, when.sensitivity)),
+  }
+}
+
+describe('the provider backstop, deciding from the rules an operator wrote', () => {
+  it('blocks on the trust axis a rule names, and not on sensitivity', () => {
+    const ledger = new Ledger()
+    feed(ledger, webFetch(1, 2, 'c1'))
+    feed(ledger, secretRead(1, 2, 'c2'), 'session-2')
+    const policy: BackstopPolicy = { enabled: true, rules: [rule('r', { trust: 'untrusted' })] }
+
+    assert.equal(shouldBlockRequest(request(), ledger, policy).blocked, true)
+    assert.deepEqual(
+      shouldBlockRequest(request({ sessionId: 'session-2' }), ledger, policy),
+      { blocked: false },
+      'a trust rule must not become a sensitivity rule',
+    )
+  })
+
+  it('blocks on the sensitivity axis a rule names, and not on trust', () => {
+    const ledger = new Ledger()
+    feed(ledger, webFetch(1, 2, 'c1'))
+    feed(ledger, secretRead(1, 2, 'c2'), 'session-2')
+    const policy: BackstopPolicy = { enabled: true, rules: [rule('r', { sensitivity: 'secret' })] }
+
+    assert.deepEqual(shouldBlockRequest(request(), ledger, policy), { blocked: false })
+    assert.equal(
+      shouldBlockRequest(request({ sessionId: 'session-2' }), ledger, policy).blocked,
+      true,
+    )
+  })
+
+  it('blocks when any rule of several matches', () => {
+    const ledger = new Ledger()
+    feed(ledger, webFetch(1, 2, 'c1'))
+    feed(ledger, secretRead(1, 2, 'c2'), 'session-2')
+    const policy: BackstopPolicy = {
+      enabled: true,
+      rules: [rule('trust', { trust: 'untrusted' }), rule('secret', { sensitivity: 'secret' })],
+    }
+
+    assert.equal(shouldBlockRequest(request(), ledger, policy).blocked, true)
+    assert.equal(
+      shouldBlockRequest(request({ sessionId: 'session-2' }), ledger, policy).blocked,
+      true,
+    )
+  })
+
+  it('cites the origin of the axis the matching rule constrained', () => {
+    const ledger = new Ledger()
+    feed(ledger, secretRead(1, 2, 'c1'))
+    const decision = shouldBlockRequest(request(), ledger, {
+      enabled: true,
+      rules: [rule('r', { sensitivity: 'secret' })],
+    })
+    assert.match(decision.blocked ? decision.reason : '', /\.env/)
+  })
+
+  it('ignores the threshold pair once a rule list is present', () => {
+    const ledger = new Ledger()
+    feed(ledger, secretRead(1, 2, 'c1'))
+    // The default threshold would block a secret context; an empty rule list is
+    // what the operator wrote, and it says nothing blocks.
+    assert.deepEqual(
+      shouldBlockRequest(request(), ledger, { enabled: true, rules: [] }),
+      { blocked: false },
+    )
+  })
+
+  it('reads no rule while it is disabled', () => {
+    const ledger = new Ledger()
+    feed(ledger, secretRead(1, 2, 'c1'))
+    assert.deepEqual(
+      shouldBlockRequest(request(), ledger, { rules: [rule('r', { sensitivity: 'public' })] }),
+      { blocked: false },
+    )
   })
 })

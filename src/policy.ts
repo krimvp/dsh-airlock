@@ -21,6 +21,9 @@
 import { DEFAULT_EVIDENCE_PATH, expandHome } from './evidence.js'
 import type { Label, Sensitivity, Trust } from './labels.js'
 import { sensitivityAtLeast, trustAtLeast } from './labels.js'
+// Type-only, and therefore erased: `prestep.ts` imports this module at runtime,
+// and `verbatimModuleSyntax` guarantees this line emits nothing.
+import type { PreStepPolicy } from './prestep.js'
 
 /**
  * What a tool can do with the context it is given.
@@ -320,6 +323,28 @@ export interface Policy {
   readonly declassify: { readonly allow: boolean }
   /** Where decisions are recorded. */
   readonly evidence: EvidencePolicy
+  /**
+   * How Gate B, the entering-message gate at `agent/pre-step`, is configured.
+   * Every field is inert by default, so an operator who configures nothing gets
+   * a pass-through.
+   */
+  readonly preStep: PreStepPolicy
+  /**
+   * The provider backstop settings an operator sets directly. What arms the
+   * backstop is the presence of a `provider` boundary `redact` rule, not a
+   * switch here; this section only carries what a rule cannot say.
+   */
+  readonly backstop: BackstopSettings
+}
+
+/** The provider backstop settings that are not derived from a rule. */
+export interface BackstopSettings {
+  /**
+   * `true` subjects auxiliary model calls — `compaction` and `session-title` —
+   * to the backstop as well. Defaults to `false`, because blocking compaction
+   * wedges the session at the label the operator wanted cleared.
+   */
+  readonly auxiliary: boolean
 }
 
 /** Where decisions are recorded. The field names match `EvidenceOptions`. */
@@ -558,6 +583,8 @@ export const DEFAULT_POLICY: Policy = Object.freeze({
   rules: DEFAULT_RULES,
   declassify: Object.freeze({ allow: true }),
   evidence: Object.freeze({ otlp: true, jsonl: true, path: expandHome(DEFAULT_EVIDENCE_PATH) }),
+  preStep: Object.freeze({}),
+  backstop: Object.freeze({ auxiliary: false }),
 })
 
 /**

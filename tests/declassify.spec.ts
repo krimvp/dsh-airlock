@@ -2,13 +2,14 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
 import {
+  AskCorrelator,
   DEFAULT_MAX_GRANTS,
   Declassifier,
   declassificationRecord,
   describeGrant,
   labelAtOrBelow,
 } from '../src/declassify.js'
-import type { DeclassifierOptions, GrantRequest } from '../src/declassify.js'
+import type { AirlockAsk, DeclassifierOptions, GrantRequest } from '../src/declassify.js'
 import type { Label } from '../src/labels.js'
 
 const SESSION = 'session-1'
@@ -269,5 +270,113 @@ describe('the declassification audit record', () => {
     assert.equal(Object.hasOwn(record, 'callId'), false)
     assert.equal(Object.hasOwn(record, 'turn'), false)
     assert.equal(Object.hasOwn(record, 'step'), false)
+  })
+})
+
+/** One question this plugin would have raised. */
+function raised(overrides: Partial<AirlockAsk> = {}): AirlockAsk {
+  return {
+    sessionId: SESSION,
+    tool: 'web_fetch',
+    callId: 'call-1',
+    capability: 'egress',
+    capabilities: ['egress'],
+    label: UNTRUSTED,
+    reason: 'airlock asks before `web_fetch` by rule ask-egress',
+    rule: 'ask-egress',
+    ...overrides,
+  }
+}
+
+/** The `approval/asked` data the harness appends for one question. */
+function asked(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: 'approval-1',
+    toolName: 'web_fetch',
+    callId: 'call-1',
+    reason: raised().reason,
+    ...overrides,
+  }
+}
+
+describe('correlating an approval back to the ask that raised it', () => {
+  it('claims the pair this plugin raised', () => {
+    const asks = new AskCorrelator()
+    const ask = raised()
+    asks.raised(ask)
+
+    assert.deepEqual(asks.asked(SESSION, asked()), ask)
+    assert.deepEqual(asks.resolve(SESSION, 'approval-1'), ask)
+  })
+
+  it('refuses an ask this plugin never raised', () => {
+    const asks = new AskCorrelator()
+    asks.raised(raised())
+
+    // Another plugin's question, about another call.
+    assert.equal(asks.asked(SESSION, asked({ callId: 'call-other', id: 'approval-2' })), undefined)
+    assert.equal(asks.resolve(SESSION, 'approval-2'), undefined)
+  })
+
+  it('refuses a matching call id under another tool name', () => {
+    const asks = new AskCorrelator()
+    asks.raised(raised())
+    assert.equal(asks.asked(SESSION, asked({ toolName: 'bash' })), undefined)
+  })
+
+  it('refuses a question a human read in someone else\'s wording', () => {
+    const asks = new AskCorrelator()
+    asks.raised(raised())
+    // The call id and tool match, but the reason is not the one this plugin
+    // composed, so the consent was given to another question.
+    assert.equal(asks.asked(SESSION, asked({ reason: 'another plugin asks' })), undefined)
+    assert.equal(asks.asked(SESSION, asked({ reason: undefined })), undefined)
+  })
+
+  it('refuses an event whose shape it does not recognise', () => {
+    const asks = new AskCorrelator()
+    asks.raised(raised())
+    for (const data of [undefined, null, 'asked', ['asked'], {}, { id: 'approval-1' }]) {
+      assert.equal(asks.asked(SESSION, data), undefined)
+    }
+  })
+
+  it('keeps sessions apart', () => {
+    const asks = new AskCorrelator()
+    asks.raised(raised())
+    assert.equal(asks.asked('session-2', asked()), undefined)
+    assert.notEqual(asks.asked(SESSION, asked()), undefined)
+    assert.equal(asks.resolve('session-2', 'approval-1'), undefined)
+  })
+
+  it('answers one question once', () => {
+    const asks = new AskCorrelator()
+    asks.raised(raised())
+    asks.asked(SESSION, asked())
+    assert.notEqual(asks.resolve(SESSION, 'approval-1'), undefined)
+    assert.equal(asks.resolve(SESSION, 'approval-1'), undefined, 'a decided ask is spent')
+    assert.equal(asks.pendingCount(), 0)
+  })
+
+  it('bounds what it remembers', () => {
+    const asks = new AskCorrelator({ maxPending: 4 })
+    for (let index = 0; index < 50; index += 1) {
+      asks.raised(raised({ callId: `call-${index}` }))
+    }
+    assert.equal(asks.pendingCount(), 4)
+    // The oldest were evicted, so their approvals correlate to nothing.
+    assert.equal(asks.asked(SESSION, asked({ callId: 'call-0' })), undefined)
+  })
+
+  it('forgets a session outright', () => {
+    const asks = new AskCorrelator()
+    asks.raised(raised())
+    asks.raised(raised({ callId: 'call-2' }))
+    asks.asked(SESSION, asked())
+    asks.raised(raised({ sessionId: 'session-2', callId: 'call-3' }))
+
+    asks.drop(SESSION)
+    assert.equal(asks.pendingCount(), 1, 'only the other session survives')
+    assert.equal(asks.resolve(SESSION, 'approval-1'), undefined)
   })
 })
