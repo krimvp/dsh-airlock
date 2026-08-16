@@ -37,6 +37,7 @@ import type {
   Capability,
   CapabilityClasses,
   Effect,
+  OpaqueReaders,
   Policy,
   Posture,
   RuleCondition,
@@ -50,6 +51,7 @@ import {
   CONDITION_KEYS,
   DEFAULT_BOUNDARY,
   DEFAULT_CLASSES,
+  DEFAULT_OPAQUE_READERS,
   DEFAULT_POLICY,
   DEFAULT_RULES,
   DEFAULT_SECRET_PATHS,
@@ -77,6 +79,7 @@ export const CONFIG_KEYS: readonly string[] = Object.freeze([
   'classes',
   'secretPaths',
   'untrustedSources',
+  'opaqueReaders',
   'rules',
   'declassify',
   'evidence',
@@ -97,6 +100,13 @@ export const PRE_STEP_REJECT_KEYS: readonly string[] = Object.freeze(['trust', '
 
 /** Every key the `backstop` section admits. */
 export const BACKSTOP_KEYS: readonly string[] = Object.freeze(['auxiliary'])
+
+/** Every key the `opaqueReaders` section admits. */
+export const OPAQUE_READER_KEYS: readonly string[] = Object.freeze([
+  'tools',
+  'sensitivity',
+  'trust',
+])
 
 /** The capability classes a tool can be assigned to by name. */
 export const ASSIGNABLE_CLASSES: readonly string[] = Object.freeze(['egress', 'mutate'])
@@ -151,6 +161,31 @@ export interface PreStepConfig {
   readonly reject?: PreStepRejection
 }
 
+/**
+ * Opaque readers, as configured.
+ *
+ * `tools` is a list of tool name patterns in the same vocabulary the capability
+ * class lists use — a plain name, or a name with a trailing `*`. It is empty
+ * until an operator writes one, because the feature is off by default.
+ *
+ * ```yaml
+ * airlock:
+ *   opaqueReaders:
+ *     tools: [bash, pwsh, run_code, "terminal_*"]
+ *     sensitivity: secret
+ *     trust: workspace
+ * ```
+ *
+ * Read the cost in the `ledger.ts` module documentation before setting `tools`.
+ * A shell declared opaque at `secret` ends the session's network access on its
+ * first call and has its own output withheld under the built-in result rule.
+ */
+export interface OpaqueReadersConfig {
+  readonly tools?: readonly string[]
+  readonly sensitivity?: Sensitivity
+  readonly trust?: Trust
+}
+
 /** The provider backstop, as configured. */
 export interface BackstopConfig {
   /**
@@ -176,6 +211,7 @@ export interface PolicyConfig {
   readonly classes?: ClassConfig
   readonly secretPaths?: readonly string[]
   readonly untrustedSources?: readonly string[]
+  readonly opaqueReaders?: OpaqueReadersConfig
   readonly rules?: readonly RuleSpec[]
   readonly declassify?: DeclassifyConfig
   readonly evidence?: EvidenceConfig
@@ -622,6 +658,48 @@ function validatePreStep(value: unknown, source: string, at: string): PreStepCon
 }
 
 /**
+ * Validate the `opaqueReaders` section.
+ *
+ * The error message names the cost, because an operator who mistyped this
+ * section is configuring the one setting in this plugin that trades a large
+ * amount of ordinary agent capability for one guarantee.
+ *
+ * @param value - the configured section.
+ * @param source - which layer it came from.
+ * @param at - where in that layer.
+ * @returns the validated section, holding only the keys it actually set.
+ */
+function validateOpaqueReaders(value: unknown, source: string, at: string): OpaqueReadersConfig {
+  const raw = requireObject(value, source, at)
+  requireKeys(
+    raw,
+    OPAQUE_READER_KEYS,
+    source,
+    at,
+    ' A tool is declared opaque by name. There is no key for a command string or'
+    + ' for result text, because a model can rewrite both.',
+  )
+
+  const readers: { tools?: readonly string[]; sensitivity?: Sensitivity; trust?: Trust } = {}
+  if (raw.tools !== undefined) {
+    readers.tools = requireStringArray(raw.tools, source, `${at}.tools`)
+  }
+  if (raw.sensitivity !== undefined) {
+    readers.sensitivity = requireEnum(
+      raw.sensitivity,
+      SENSITIVITY_LEVELS,
+      source,
+      `${at}.sensitivity`,
+      'a sensitivity level',
+    )
+  }
+  if (raw.trust !== undefined) {
+    readers.trust = requireEnum(raw.trust, TRUST_LEVELS, source, `${at}.trust`, 'a trust level')
+  }
+  return readers
+}
+
+/**
  * Validate the `backstop` section.
  * @param value - the configured section.
  * @param source - which layer it came from.
@@ -667,6 +745,7 @@ export function validateConfig(
     classes?: ClassConfig
     secretPaths?: readonly string[]
     untrustedSources?: readonly string[]
+    opaqueReaders?: OpaqueReadersConfig
     rules?: readonly RuleSpec[]
     declassify?: DeclassifyConfig
     evidence?: EvidenceConfig
@@ -695,6 +774,9 @@ export function validateConfig(
       source,
       `${at}.untrustedSources`,
     )
+  }
+  if (raw.opaqueReaders !== undefined) {
+    config.opaqueReaders = validateOpaqueReaders(raw.opaqueReaders, source, `${at}.opaqueReaders`)
   }
   if (raw.rules !== undefined) {
     config.rules = validateRules(raw.rules, source, `${at}.rules`)
@@ -795,9 +877,9 @@ function mergeSection<T extends object>(base: T | undefined, override: T | undef
  * A key the higher layer sets replaces the same key in the lower one. A list
  * replaces a list rather than extending it: an operator reviewing a diff should
  * be able to read the effective list off the page, and a silent union would
- * also make a class impossible to narrow. The three sections that hold
- * independent switches — `classes`, `declassify`, `evidence`, `preStep`, and
- * `backstop` — merge one key at a time, so setting `classes.egress` leaves the
+ * also make a class impossible to narrow. The sections that hold independent
+ * switches — `classes`, `declassify`, `evidence`, `preStep`, `backstop`, and
+ * `opaqueReaders` — merge one key at a time, so setting `classes.egress` leaves the
  * built-in `mutate` list in place. That merge is one level deep: a `preStep`
  * layer that sets `reject` replaces the whole `reject` mapping below it, for the
  * same reason a list replaces a list.
@@ -812,6 +894,7 @@ export function mergeConfigs(base: PolicyConfig, override: PolicyConfig): Policy
   const evidence = mergeSection(base.evidence, override.evidence)
   const preStep = mergeSection(base.preStep, override.preStep)
   const backstop = mergeSection(base.backstop, override.backstop)
+  const opaqueReaders = mergeSection(base.opaqueReaders, override.opaqueReaders)
   return {
     ...base,
     ...override,
@@ -820,6 +903,7 @@ export function mergeConfigs(base: PolicyConfig, override: PolicyConfig): Policy
     ...evidence === undefined ? {} : { evidence },
     ...preStep === undefined ? {} : { preStep },
     ...backstop === undefined ? {} : { backstop },
+    ...opaqueReaders === undefined ? {} : { opaqueReaders },
   }
 }
 
@@ -860,6 +944,15 @@ export function resolvePolicy(config: PolicyConfig = {}): Policy {
   const backstop: BackstopSettings = {
     auxiliary: config.backstop?.auxiliary ?? DEFAULT_POLICY.backstop.auxiliary,
   }
+  const readers = config.opaqueReaders
+  // `trust` is spread conditionally rather than defaulted: an absent trust floor
+  // means the axis is left where the inspected label put it, which is not the
+  // same statement as a floor of `user`.
+  const opaqueReaders: OpaqueReaders = {
+    tools: readers?.tools ?? DEFAULT_OPAQUE_READERS.tools,
+    sensitivity: readers?.sensitivity ?? DEFAULT_OPAQUE_READERS.sensitivity,
+    ...readers?.trust === undefined ? {} : { trust: readers.trust },
+  }
 
   return {
     posture: config.posture ?? DEFAULT_POLICY.posture,
@@ -867,6 +960,7 @@ export function resolvePolicy(config: PolicyConfig = {}): Policy {
     classes,
     secretPaths: config.secretPaths ?? DEFAULT_SECRET_PATHS,
     untrustedSources: config.untrustedSources ?? DEFAULT_UNTRUSTED_SOURCES,
+    opaqueReaders,
     rules: config.rules === undefined ? DEFAULT_RULES : compileRules(config.rules),
     declassify: { allow: config.declassify?.allow ?? DEFAULT_POLICY.declassify.allow },
     evidence: {

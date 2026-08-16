@@ -58,7 +58,7 @@ import type { Outcome } from './evidence.js'
 import { evaluate } from './gate.js'
 import type { Label } from './labels.js'
 import { Ledger, resultLabelFor } from './ledger.js'
-import type { ContextLabel } from './ledger.js'
+import type { ContextLabel, LedgerOptions } from './ledger.js'
 import { applyPreStep } from './prestep.js'
 import { APPROVAL_SEAM, GUARD_SEAM, PROVIDER_SEAM, selectRules } from './policy.js'
 import type { Capability, Policy } from './policy.js'
@@ -66,19 +66,26 @@ import { decideResult } from './results.js'
 
 export type { Capability, Effect, Boundary, Posture, Policy, Rule } from './policy.js'
 export type { PolicyConfig, LoadPolicyOptions } from './config.js'
-export type { ContextLabel, LabelledNode, Provenance, ResultLabel } from './ledger.js'
+export type { ContextLabel, LabelledNode, LedgerOptions, Provenance, ResultLabel } from './ledger.js'
 export type { Decision } from './gate.js'
 export type { Label, Sensitivity, Trust } from './labels.js'
 export type { DecisionRecord, Outcome } from './evidence.js'
 export type { AirlockAsk, Grant } from './declassify.js'
 export type { PreStepPolicy, PreStepRejection } from './prestep.js'
 export type { BackstopPolicy, BackstopRule } from './backstop.js'
-export type { BackstopConfig, PreStepConfig } from './config.js'
-export type { BackstopSettings } from './policy.js'
+export type { BackstopConfig, OpaqueReadersConfig, PreStepConfig } from './config.js'
+export type { BackstopSettings, OpaqueReaders } from './policy.js'
 
 export { BOTTOM, formatLabel, join, joinAll } from './labels.js'
 export { Ledger, SessionLedger, resultLabelFor } from './ledger.js'
-export { classify, selectRules, DEFAULT_POLICY, DEFAULT_RULES, DEFAULT_SECRET_PATHS } from './policy.js'
+export {
+  classify,
+  selectRules,
+  DEFAULT_OPAQUE_READERS,
+  DEFAULT_POLICY,
+  DEFAULT_RULES,
+  DEFAULT_SECRET_PATHS,
+} from './policy.js'
 export { loadPolicy, policyFromConfig, validateConfig, PolicyConfigError } from './config.js'
 export { denialMessage, evaluate } from './gate.js'
 export { evaluateAsk, evaluateAskDetail, postureHint, resolvePosture } from './ask.js'
@@ -128,10 +135,18 @@ export async function apply(ctx: Context, config: unknown = {}): Promise<void> {
     }
   }
 
-  const ledger = new Ledger({
+  // One labelling configuration, held once and handed to both callers of
+  // `resultLabelFor`. The ledger labels a `tool/result` event after the fact and
+  // the result boundary labels the same result live, before the event exists. A
+  // setting present in one and missing from the other would label one result two
+  // ways, and the gate would then decide over a label the ledger disagrees with.
+  const labelling: LedgerOptions = {
     secretPaths: policy.secretPaths,
     untrustedSources: policy.untrustedSources,
-  })
+    opaqueReaders: policy.opaqueReaders,
+  }
+
+  const ledger = new Ledger(labelling)
   const declassifier = new Declassifier({ allow: policy.declassify.allow })
   const asks = new AskCorrelator()
   const evidence = new EvidenceSink({
@@ -414,10 +429,7 @@ export async function apply(ctx: Context, config: unknown = {}): Promise<void> {
       ): Promise<PostToolDecision> => {
         try {
           const sessionId = exec.agent?.id ?? 'unknown'
-          const resolved = resultLabelFor(exec.name, callArguments(exec), {
-            secretPaths: policy.secretPaths,
-            untrustedSources: policy.untrustedSources,
-          })
+          const resolved = resultLabelFor(exec.name, callArguments(exec), labelling)
           const cleared = declassifier.isDeclassified(sessionId, {
             capability: 'read',
             tool: exec.name,

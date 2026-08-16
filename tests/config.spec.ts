@@ -17,6 +17,7 @@ import {
 } from '../src/config.js'
 import {
   DEFAULT_CLASSES,
+  DEFAULT_OPAQUE_READERS,
   DEFAULT_POLICY,
   DEFAULT_SECRET_PATHS,
   GUARD_SEAM,
@@ -642,5 +643,79 @@ describe('the backstop section', () => {
 
   it('refuses a non-boolean auxiliary', () => {
     assert.equal(refusal({ backstop: { auxiliary: 'yes' } }).at, 'airlock.backstop.auxiliary')
+  })
+})
+
+describe('the opaqueReaders section', () => {
+  it('accepts the documented shape in full', () => {
+    const config = validateConfig({
+      opaqueReaders: {
+        tools: ['bash', 'pwsh', 'run_code', 'terminal_*'],
+        sensitivity: 'secret',
+        trust: 'workspace',
+      },
+    })
+    assert.deepEqual(config.opaqueReaders, {
+      tools: ['bash', 'pwsh', 'run_code', 'terminal_*'],
+      sensitivity: 'secret',
+      trust: 'workspace',
+    })
+  })
+
+  it('is off until an operator names a tool', () => {
+    const policy = resolvePolicy({})
+    assert.deepEqual(policy.opaqueReaders.tools, [])
+    assert.equal(policy.opaqueReaders.sensitivity, 'secret')
+    assert.deepEqual(policy.opaqueReaders, DEFAULT_OPAQUE_READERS)
+  })
+
+  it('resolves a named tool onto the policy, keeping the default floor', () => {
+    const readers = resolvePolicy({ opaqueReaders: { tools: ['bash'] } }).opaqueReaders
+    assert.deepEqual(readers.tools, ['bash'])
+    assert.equal(readers.sensitivity, 'secret')
+  })
+
+  it('leaves the trust floor absent rather than undefined when nobody set one', () => {
+    const readers = resolvePolicy({ opaqueReaders: { tools: ['bash'] } }).opaqueReaders
+    assert.equal(Object.hasOwn(readers, 'trust'), false)
+    assert.equal(resolvePolicy({ opaqueReaders: { trust: 'untrusted' } }).opaqueReaders.trust, 'untrusted')
+  })
+
+  it('refuses a typo, and names the path it is at', () => {
+    const error = refusal({ opaqueReaders: { tool: ['bash'] } })
+    assert.equal(error.at, 'airlock.opaqueReaders.tool')
+    assert.match(error.message, /is not a key airlock knows/)
+    assert.match(error.message, /`tools`, `sensitivity`, `trust`/)
+  })
+
+  it('says there is no key for a command string', () => {
+    const error = refusal({ opaqueReaders: { commandPattern: 'cat *' } })
+    assert.equal(error.at, 'airlock.opaqueReaders.commandPattern')
+    assert.match(error.message, /no key for a command string/)
+  })
+
+  it('refuses an unknown sensitivity level', () => {
+    const error = refusal({ opaqueReaders: { tools: ['bash'], sensitivity: 'very-secret' } })
+    assert.equal(error.at, 'airlock.opaqueReaders.sensitivity')
+    assert.match(error.message, /`public`, `confidential`, `secret`/)
+  })
+
+  it('refuses an unknown trust level', () => {
+    const error = refusal({ opaqueReaders: { tools: ['bash'], trust: 'unstrusted' } })
+    assert.equal(error.at, 'airlock.opaqueReaders.trust')
+    assert.match(error.message, /is not a trust level airlock knows/)
+  })
+
+  it('refuses a tool list that is not a list of strings', () => {
+    assert.equal(refusal({ opaqueReaders: { tools: 'bash' } }).at, 'airlock.opaqueReaders.tools')
+    assert.equal(refusal({ opaqueReaders: { tools: [1] } }).at, 'airlock.opaqueReaders.tools[0]')
+  })
+
+  it('merges one key at a time across layers', () => {
+    const merged = mergeConfigs(
+      { opaqueReaders: { tools: ['bash'] } },
+      { opaqueReaders: { sensitivity: 'confidential' } },
+    )
+    assert.deepEqual(merged.opaqueReaders, { tools: ['bash'], sensitivity: 'confidential' })
   })
 })

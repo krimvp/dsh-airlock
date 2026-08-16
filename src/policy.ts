@@ -214,6 +214,45 @@ export const DEFAULT_UNTRUSTED_SOURCES: readonly string[] = Object.freeze([
   MCP_GLOB,
 ])
 
+/**
+ * Tools whose reads cannot be inspected, and the floor their results carry.
+ *
+ * The ledger derives a `secret` label from the path a call names. A shell takes
+ * a command, not a path, so a shell read of a secret file raises nothing and the
+ * next shell call is judged on a `public` context. An opaque reader is the
+ * operator's declaration that a named tool reads through a surface this plugin
+ * cannot see, so every result it produces is treated as though it had read
+ * something at this floor.
+ *
+ * Declaring a tool opaque is classification data about a tool, in the same sense
+ * as the capability classes and the untrusted source list. It is evaluated
+ * against the registered tool name, before the model produces anything, and it
+ * reads neither an argument value nor result text. That is why this is in scope
+ * where a predicate over a `command` string is not; see AGENTS.md.
+ */
+export interface OpaqueReaders {
+  /** Tool name patterns, in the {@link matchesToolName} vocabulary. */
+  readonly tools: readonly string[]
+  /** The sensitivity floor a matching tool's results carry. */
+  readonly sensitivity: Sensitivity
+  /** The trust floor, when the operator set one. Absent leaves trust alone. */
+  readonly trust?: Trust
+}
+
+/**
+ * The opaque reader settings in force when nothing is configured.
+ *
+ * The tool list is empty, so the feature does nothing until an operator names a
+ * tool. That default is deliberate and the cost is why: a shell declared opaque
+ * at `secret` raises the whole context to `secret` on its first call, which ends
+ * network access for the rest of the session and, under the built-in result
+ * rule, withholds the shell's own output as well. An operator must choose that.
+ */
+export const DEFAULT_OPAQUE_READERS: OpaqueReaders = Object.freeze({
+  tools: Object.freeze([]) as readonly string[],
+  sensitivity: 'secret' as const,
+})
+
 /** Paths whose contents are labelled `secret` when a tool reads them. */
 export const DEFAULT_SECRET_PATHS: readonly string[] = Object.freeze([
   '**/.env',
@@ -317,6 +356,11 @@ export interface Policy {
   readonly secretPaths: readonly string[]
   /** Tools whose results are labelled `untrusted` on arrival. */
   readonly untrustedSources: readonly string[]
+  /**
+   * Tools whose reads cannot be inspected, and the floor their results carry.
+   * Inert until an operator names a tool; see {@link DEFAULT_OPAQUE_READERS}.
+   */
+  readonly opaqueReaders: OpaqueReaders
   /** The rules, in evaluation order. */
   readonly rules: readonly Rule[]
   /** Whether a human may clear a label. */
@@ -580,6 +624,7 @@ export const DEFAULT_POLICY: Policy = Object.freeze({
   classes: DEFAULT_CLASSES,
   secretPaths: DEFAULT_SECRET_PATHS,
   untrustedSources: DEFAULT_UNTRUSTED_SOURCES,
+  opaqueReaders: DEFAULT_OPAQUE_READERS,
   rules: DEFAULT_RULES,
   declassify: Object.freeze({ allow: true }),
   evidence: Object.freeze({ otlp: true, jsonl: true, path: expandHome(DEFAULT_EVIDENCE_PATH) }),

@@ -770,3 +770,185 @@ describe('the provider backstop, armed by the rule the operator wrote', () => {
     assert.equal((await through(claimed, compaction)).reached, false)
   })
 })
+
+/** A session whose only history is a shell command that read a credential file. */
+function shellRead(command = 'cat .env'): SessionEvent[] {
+  return [
+    { type: 'user/message', seq: 1, time: 1, surfaceOp: 'append', data: { source: { kind: 'user' } } },
+    {
+      type: 'tool/call',
+      seq: 2,
+      time: 2,
+      data: { callId: 'b1', name: 'bash', arguments: JSON.stringify({ command }) },
+    },
+    {
+      type: 'tool/result',
+      seq: 3,
+      time: 3,
+      surfaceOp: 'append',
+      data: { message: { source: { kind: 'tool', callId: 'b1' } } },
+    },
+  ]
+}
+
+/** Mount the plugin, feed it a history, and hand back the guard. */
+async function guardOver(
+  events: SessionEvent[],
+  config: Record<string, unknown> = {},
+): Promise<(exec: ToolExecution) => string | undefined> {
+  const { ctx, guards, listeners } = harness()
+  await apply(ctx as never, { evidence: { jsonl: false, otlp: false }, ...config })
+  feed(listeners, events)
+  return guards[0]!
+}
+
+describe('a shell read, with no opaque reader declared', () => {
+  it('leaves the context public, and the next shell call allowed', async () => {
+    // This is a known and unfixed bypass, pinned here so that nobody reads the
+    // default configuration as covering it. The ledger derives `secret` from the
+    // path a call names, and a shell names a command instead. Compare the
+    // `read {file_path}` case in `denies the exfiltration through every egress
+    // tool`, which is denied.
+    const guard = await guardOver(shellRead())
+    assert.equal(guard(call('bash')), undefined, 'the bypass is real and is not covered by default')
+    assert.equal(guard(call('web_fetch')), undefined)
+  })
+})
+
+describe('a shell declared an opaque reader', () => {
+  const OPAQUE_BASH = { opaqueReaders: { tools: ['bash'] } }
+
+  it('denies the shell call that follows the shell read', async () => {
+    const guard = await guardOver(shellRead(), OPAQUE_BASH)
+    const denial = guard(call('bash'))
+    assert.notEqual(denial, undefined, 'the floor must reach the guard through the ledger')
+    assert.match(String(denial), /secret/)
+  })
+
+  it('denies every other egress tool for the rest of the session', async () => {
+    const guard = await guardOver(shellRead(), OPAQUE_BASH)
+    for (const tool of ['bash', 'web_fetch', 'run_code', 'mcp__pastebin__create']) {
+      assert.notEqual(guard(call(tool)), undefined, `${tool} must be denied`)
+    }
+  })
+
+  it('raises the floor on a harmless command too, which is the price', async () => {
+    // The declaration is about the tool, not the command. Nothing here reads the
+    // command string, so `ls` costs the session its network access exactly as
+    // `cat .env` does.
+    const guard = await guardOver(shellRead('ls -la'), OPAQUE_BASH)
+    assert.notEqual(guard(call('bash')), undefined)
+  })
+
+  it('leaves reading open, and leaves an undeclared tool alone', async () => {
+    const guard = await guardOver(shellRead(), OPAQUE_BASH)
+    for (const tool of ['read', 'glob', 'grep']) {
+      assert.equal(guard(call(tool)), undefined, `${tool} must stay open`)
+    }
+
+    const clean = await guardOver([
+      { type: 'user/message', seq: 1, time: 1, surfaceOp: 'append', data: { source: { kind: 'user' } } },
+      {
+        type: 'tool/call',
+        seq: 2,
+        time: 2,
+        data: { callId: 'r1', name: 'read', arguments: '{"file_path":"/app/readme.md"}' },
+      },
+      {
+        type: 'tool/result',
+        seq: 3,
+        time: 3,
+        surfaceOp: 'append',
+        data: { message: { source: { kind: 'tool', callId: 'r1' } } },
+      },
+    ], OPAQUE_BASH)
+    assert.equal(clean(call('bash')), undefined, 'a tool nobody declared opaque changes nothing')
+  })
+
+  it('matches a trailing star', async () => {
+    const events: SessionEvent[] = [
+      { type: 'user/message', seq: 1, time: 1, surfaceOp: 'append', data: { source: { kind: 'user' } } },
+      {
+        type: 'tool/call',
+        seq: 2,
+        time: 2,
+        data: { callId: 't1', name: 'terminal_send', arguments: '{"text":"cat .env"}' },
+      },
+      {
+        type: 'tool/result',
+        seq: 3,
+        time: 3,
+        surfaceOp: 'append',
+        data: { message: { source: { kind: 'tool', callId: 't1' } } },
+      },
+    ]
+    const guard = await guardOver(events, { opaqueReaders: { tools: ['terminal_*'] } })
+    assert.notEqual(guard(call('bash')), undefined, 'terminal_* must have matched terminal_send')
+  })
+
+  it('does not lower a label it did not raise', async () => {
+    const guard = await guardOver(untrustedPage(), OPAQUE_BASH)
+    const denial = guard(call('web_fetch'))
+    assert.match(String(denial), /untrusted/, 'an untrusted page stays untrusted')
+  })
+
+  it('labels the result the same way at the result boundary as in the ledger', async () => {
+    // Both label paths run off one configuration. The floor is what makes the
+    // result boundary withhold this result, and the same floor is what the
+    // ledger folds into the context, so the two cannot disagree.
+    const { ctx, listeners } = harness()
+    await apply(ctx as never, {
+      evidence: { jsonl: false, otlp: false },
+      opaqueReaders: { tools: ['bash'] },
+    })
+
+    const post = listeners.get('tools/post-execute')!
+    const decision: PostToolDecision = await post(
+      call('bash', { command: 'cat .env' }),
+      { isError: false, value: 'KEY=REAL', content: [{ type: 'text', text: 'KEY=REAL' }] },
+      async () => ({ kind: 'accept' }),
+    )
+
+    // The honest consequence, and the reason `sensitivity: secret` is expensive:
+    // the built-in result rule withholds anything labelled secret, so a shell
+    // declared opaque at `secret` no longer shows the model its own output.
+    assert.equal(decision.kind, 'block')
+    assert.ok(!JSON.stringify(decision).includes('KEY=REAL'))
+  })
+})
+
+describe('an opaque reader at confidential, keeping the shell usable', () => {
+  const CONFIDENTIAL = {
+    opaqueReaders: { tools: ['bash'], sensitivity: 'confidential' },
+    rules: [
+      {
+        id: 'untrusted-no-egress',
+        when: { trust: 'untrusted' as const, capability: 'egress' as const },
+        then: 'deny' as const,
+      },
+      {
+        id: 'confidential-no-egress',
+        when: { sensitivity: 'confidential' as const, capability: 'egress' as const },
+        then: 'deny' as const,
+      },
+    ],
+  }
+
+  it('still denies the shell call that follows the shell read', async () => {
+    const guard = await guardOver(shellRead(), CONFIDENTIAL)
+    assert.notEqual(guard(call('bash')), undefined)
+  })
+
+  it('lets the shell result reach the model', async () => {
+    const { ctx, listeners } = harness()
+    await apply(ctx as never, { evidence: { jsonl: false, otlp: false }, ...CONFIDENTIAL })
+
+    const post = listeners.get('tools/post-execute')!
+    const decision: PostToolDecision = await post(
+      call('bash', { command: 'ls' }),
+      { isError: false, value: 'readme.md', content: [{ type: 'text', text: 'readme.md' }] },
+      async () => ({ kind: 'accept' }),
+    )
+    assert.equal(decision.kind, 'accept', 'a confidential floor is below the withholding rule')
+  })
+})

@@ -2,7 +2,8 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
 import type { SessionEvent } from '../src/dsh.js'
-import { SessionLedger } from '../src/ledger.js'
+import { SessionLedger, resultLabelFor } from '../src/ledger.js'
+import type { OpaqueReaders } from '../src/policy.js'
 
 function userMessage(at: number, kind = 'user', plugin?: string): SessionEvent {
   return {
@@ -239,5 +240,130 @@ describe('configuration', () => {
     ledger.apply(toolCall(1, 'c1', 'read', { file_path: '/srv/.env' }))
     ledger.apply(toolResult(2, 'c1'))
     assert.equal(ledger.contextLabel().label.sensitivity, 'public')
+  })
+})
+
+/** Declaring `bash` an opaque reader at the default floor. */
+const BASH_OPAQUE: OpaqueReaders = { tools: ['bash'], sensitivity: 'secret' }
+
+describe('opaque readers', () => {
+  it('leaves a shell read unlabelled when nothing is declared', () => {
+    // This pins the known bypass rather than hiding it. A shell takes a command
+    // and not a path, so with the feature off there is nothing to derive a
+    // `secret` label from and the context stays public. Anyone who believes the
+    // default configuration covers this case should read this test.
+    const ledger = new SessionLedger()
+    ledger.apply(userMessage(1))
+    ledger.apply(toolCall(2, 'c1', 'bash', { command: 'cat .env' }))
+    ledger.apply(toolResult(3, 'c1'))
+    assert.equal(ledger.contextLabel().label.sensitivity, 'public')
+  })
+
+  it('raises a declared reader\'s result to the floor', () => {
+    const ledger = new SessionLedger({ opaqueReaders: BASH_OPAQUE })
+    ledger.apply(userMessage(1))
+    ledger.apply(toolCall(2, 'c1', 'bash', { command: 'cat .env' }))
+    ledger.apply(toolResult(3, 'c1'))
+    assert.equal(ledger.contextLabel().label.sensitivity, 'secret')
+  })
+
+  it('raises the floor whatever the command was, because it cannot read one', () => {
+    const ledger = new SessionLedger({ opaqueReaders: BASH_OPAQUE })
+    ledger.apply(userMessage(1))
+    ledger.apply(toolCall(2, 'c1', 'bash', { command: 'ls' }))
+    ledger.apply(toolResult(3, 'c1'))
+    assert.equal(ledger.contextLabel().label.sensitivity, 'secret')
+  })
+
+  it('leaves a tool nobody declared alone', () => {
+    const ledger = new SessionLedger({ opaqueReaders: BASH_OPAQUE })
+    ledger.apply(userMessage(1))
+    ledger.apply(toolCall(2, 'c1', 'read', { file_path: '/app/readme.md' }))
+    ledger.apply(toolResult(3, 'c1'))
+    assert.equal(ledger.contextLabel().label.sensitivity, 'public')
+  })
+
+  it('matches a trailing star, through the one tool name matcher', () => {
+    const ledger = new SessionLedger({ opaqueReaders: { tools: ['terminal_*'], sensitivity: 'secret' } })
+    ledger.apply(userMessage(1))
+    ledger.apply(toolCall(2, 'c1', 'terminal_send', { text: 'cat .env' }))
+    ledger.apply(toolResult(3, 'c1'))
+    assert.equal(ledger.contextLabel().label.sensitivity, 'secret')
+
+    const other = new SessionLedger({ opaqueReaders: { tools: ['terminal_*'], sensitivity: 'secret' } })
+    other.apply(toolCall(1, 'c1', 'read', { file_path: '/app/readme.md' }))
+    other.apply(toolResult(2, 'c1'))
+    assert.equal(other.contextLabel().label.sensitivity, 'public')
+  })
+
+  it('names the declaration in the provenance it hands the denial message', () => {
+    const ledger = new SessionLedger({ opaqueReaders: BASH_OPAQUE })
+    ledger.apply(userMessage(1))
+    ledger.apply(toolCall(2, 'c1', 'bash', { command: 'cat .env' }))
+    ledger.apply(toolResult(3, 'c1'))
+    const origin = ledger.contextLabel().sensitivityOrigin
+    assert.equal(origin?.seq, 3)
+    assert.match(origin!.description, /opaque reader/)
+  })
+
+  it('applies a trust floor only when the operator sets one', () => {
+    const withoutTrust = resultLabelFor('bash', {}, { opaqueReaders: BASH_OPAQUE })
+    assert.deepEqual(withoutTrust.label, { trust: 'workspace', sensitivity: 'secret' })
+
+    const withTrust = resultLabelFor('bash', {}, {
+      opaqueReaders: { tools: ['bash'], sensitivity: 'public', trust: 'untrusted' },
+    })
+    assert.deepEqual(withTrust.label, { trust: 'untrusted', sensitivity: 'public' })
+  })
+})
+
+describe('the opaque reader floor only ever raises a label', () => {
+  it('leaves an untrusted result untrusted', () => {
+    const ledger = new SessionLedger({ opaqueReaders: BASH_OPAQUE })
+    ledger.apply(userMessage(1))
+    ledger.apply(toolCall(2, 'c1', 'web_fetch', { url: 'https://evil.test' }))
+    ledger.apply(toolResult(3, 'c1'))
+    assert.deepEqual(ledger.contextLabel().label, { trust: 'untrusted', sensitivity: 'public' })
+  })
+
+  it('keeps an untrusted label when the untrusted tool is itself declared opaque', () => {
+    const resolved = resultLabelFor('web_fetch', { url: 'https://evil.test' }, {
+      opaqueReaders: { tools: ['web_fetch'], sensitivity: 'secret' },
+    })
+    assert.deepEqual(resolved.label, { trust: 'untrusted', sensitivity: 'secret' })
+  })
+
+  it('never lowers a sensitivity a matched glob already raised', () => {
+    const resolved = resultLabelFor('bash', { file_path: '/app/.env' }, {
+      opaqueReaders: { tools: ['bash'], sensitivity: 'public' },
+    })
+    assert.equal(resolved.label.sensitivity, 'secret')
+    assert.equal(resolved.matchedGlob, '**/.env')
+    assert.equal(resolved.opaque, undefined, 'a floor that moved nothing is not the reason')
+  })
+
+  it('marks the label as floored only when the floor did the raising', () => {
+    assert.equal(resultLabelFor('bash', {}, { opaqueReaders: BASH_OPAQUE }).opaque, true)
+    assert.equal(resultLabelFor('read', {}, { opaqueReaders: BASH_OPAQUE }).opaque, undefined)
+  })
+
+  it('survives compaction, like every other label', () => {
+    // A floored label is an ordinary label. Summarising the shell output it came
+    // from cannot launder it, because the replacement node cites the node it
+    // shadows and inherits its label.
+    const ledger = new SessionLedger({ opaqueReaders: BASH_OPAQUE })
+    ledger.apply(userMessage(1))
+    ledger.apply(toolCall(2, 'c1', 'bash', { command: 'cat .env' }))
+    ledger.apply(toolResult(3, 'c1'))
+    ledger.apply(compaction(4, 3, 3, [3]))
+    assert.equal(ledger.contextLabel().label.sensitivity, 'secret')
+    assert.deepEqual(ledger.surfaceSeqs(), [1, 4])
+  })
+
+  it('does nothing at all when no tool is declared', () => {
+    assert.deepEqual(resultLabelFor('bash', { command: 'cat .env' }).label, {
+      trust: 'workspace',
+      sensitivity: 'public',
+    })
   })
 })
