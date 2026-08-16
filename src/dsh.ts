@@ -105,6 +105,89 @@ export interface ToolRuntime {
   guard(guard: ToolGuard): () => void
 }
 
+/** One model-facing content block. `text` is the only variant this plugin authors. */
+export interface ContentBlock {
+  readonly type: string
+  readonly text?: string
+  readonly [key: string]: unknown
+}
+
+/** A successful or failed tool outcome, as `tools/post-execute` receives it. */
+export interface ToolExecutionResult {
+  readonly isError: boolean
+  readonly value?: unknown
+  readonly content?: readonly ContentBlock[]
+  readonly error?: { readonly message: string }
+  readonly meta?: unknown
+}
+
+/**
+ * The decision `tools/post-execute` returns.
+ *
+ * Replacing `content` is presentation policy only: the canonical `value`
+ * survives, and a Code Mode program reads that value. Confidentiality therefore
+ * requires `block`, or an `accept` that replaces the value. Setting both
+ * `content` and `value` is a runtime error in the harness.
+ */
+export type PostToolDecision =
+  | { readonly kind: 'accept'; readonly content?: readonly ContentBlock[] }
+  | { readonly kind: 'accept'; readonly value: unknown }
+  | { readonly kind: 'block'; readonly feedback: readonly ContentBlock[] }
+
+/** The decision `tools/pre-execute` returns. Arguments cannot be rewritten here. */
+export type PreToolDecision =
+  | { readonly kind: 'allow' }
+  | { readonly kind: 'deny'; readonly reason: string }
+  | { readonly kind: 'ask'; readonly reason?: string }
+
+/** The outcome of one approval question. Callers fail closed on `unavailable`. */
+export type ApprovalOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'
+
+/** What the harness asks an answerer. It carries no tool arguments, so `reason` must carry the detail. */
+export interface ApprovalRequest {
+  readonly agent: Agent
+  readonly toolName: string
+  readonly callId?: string
+  readonly reason?: string
+  readonly signal?: AbortSignal
+}
+
+/** The subset of `ctx.approval` this plugin uses. */
+export interface ApprovalService {
+  request(request: ApprovalRequest): Promise<ApprovalOutcome>
+  readonly config?: { readonly policy?: 'ask' | 'never' }
+}
+
+/** One assembled model request, as `llm/stream` receives it. A loop-built request is deep-frozen. */
+export interface GenerateOptions {
+  readonly provider: string
+  readonly model: string
+  readonly messages: readonly Message[]
+  readonly system?: string
+  readonly sessionId?: string
+  readonly purpose?: 'compaction' | 'session-title'
+}
+
+/** One chunk of a model response stream. */
+export interface StreamChunk {
+  readonly type: string
+  readonly [key: string]: unknown
+}
+
+/** The messages entering a proposed step, as `agent/pre-step` receives them. */
+export interface PreStepPayload {
+  readonly agent?: Agent
+  readonly messages?: readonly Message[]
+  readonly turn?: number
+  readonly step?: number
+  readonly signal?: AbortSignal
+}
+
+/** Whether and with which messages the loop enters a proposed step. */
+export type PreStepDecision =
+  | { readonly kind: 'reject' }
+  | { readonly kind: 'enter'; readonly messages: readonly Message[] }
+
 type Listener = (...args: never[]) => unknown
 
 /** Register a listener for a dsh event the cordis `Events` interface does not declare. */
@@ -121,4 +204,20 @@ export function toolRuntime(ctx: Context): ToolRuntime | undefined {
   if (runtime === undefined || runtime === null) return undefined
   if (typeof (runtime as ToolRuntime).guard !== 'function') return undefined
   return runtime as ToolRuntime
+}
+
+/**
+ * Read the approval seam off the context.
+ *
+ * The harness consumes this seam opportunistically with no static inject, and a
+ * deployment without it keeps the ask-to-deny degrade. This plugin does the
+ * same, so it stays loadable in a composition that mounts no approver.
+ *
+ * @returns the service, or `undefined` when no approval channel is mounted.
+ */
+export function approvalService(ctx: Context): ApprovalService | undefined {
+  const service = (ctx as unknown as { approval?: unknown }).approval
+  if (service === undefined || service === null) return undefined
+  if (typeof (service as ApprovalService).request !== 'function') return undefined
+  return service as ApprovalService
 }
