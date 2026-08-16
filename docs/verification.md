@@ -1,7 +1,8 @@
 # Verification against the harness
 
-[proposal.md](./proposal.md) is the strategy document this implementation follows.
-It was written from the harness documentation.
+The strategy proposal this implementation follows was removed from the tree once
+0.1.0 shipped; it remains in git history as `docs/proposal.md`. It was written from
+the harness documentation.
 This file records what was checked against the harness source before any code was written,
 what was later checked against a running harness, and where both the proposal and this
 project's own documentation turned out to be wrong.
