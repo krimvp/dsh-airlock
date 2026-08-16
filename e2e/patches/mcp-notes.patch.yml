@@ -1,0 +1,12 @@
+# Mount the fixture MCP server, so the session can acquire a genuine
+# `untrusted` label from an `mcp__*` tool result.
+- insert:
+    - id: mcp-notes
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: notes
+        transport: stdio
+        command: node
+        args:
+          - !!js process.env.E2E_MCP_SERVER
+        failOnStartupError: true

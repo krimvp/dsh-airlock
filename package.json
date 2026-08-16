@@ -1,6 +1,6 @@
 {
   "name": "dsh-airlock",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Provenance-gated tool use for DeepSeek Harness (dsh) — labels every input, propagates the labels, and denies capabilities over labels instead of argument strings",
   "type": "module",
   "main": "./dist/index.js",
