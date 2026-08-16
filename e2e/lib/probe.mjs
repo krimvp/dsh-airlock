@@ -10,6 +10,7 @@
  *   node probe.mjs <session-dir> dump
  *   node probe.mjs <session-dir> called <tool>
  *   node probe.mjs <session-dir> succeeded <tool>
+ *   node probe.mjs <session-dir> succeeded-matching <tool> <substring-in-arguments>
  *   node probe.mjs <session-dir> denied <tool> <substring>
  *   node probe.mjs <session-dir> no-airlock-denial
  *   node probe.mjs <session-dir> no-airlock-interference <tool>
@@ -108,6 +109,14 @@ function answer() {
       return calls.some((call) => call.name === tool)
     case 'succeeded':
       return results.some((entry) => entry.name === tool && !entry.isError)
+    case 'succeeded-matching': {
+      // Matching an argument string is forbidden in the plugin's decision path
+      // and perfectly ordinary in a test that asks what the model actually ran.
+      const matching = calls
+        .filter((call) => call.name === tool && String(call.arguments ?? '').includes(needle))
+        .map((call) => call.callId)
+      return results.some((entry) => matching.includes(entry.callId) && !entry.isError)
+    }
     case 'denied':
       return results.some((entry) =>
         entry.name === tool
