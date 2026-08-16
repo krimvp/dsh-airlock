@@ -183,6 +183,18 @@ Labelling a shell read would require parsing the command string, which AGENTS.md
 is therefore a boundary of the design and not a defect to be patched. The README documents it
 first among the limitations, with the mitigations that do work.
 
+The sequential half of it now has an opt-in mitigation, added after this run. An operator may
+declare a tool an **opaque reader**, and every result that tool produces then carries a label
+floor joined into the ordinary lattice, so the shell call after a shell read meets the ordinary
+`secret-no-egress` denial. The declaration is evaluated against the registered tool name before
+any model output exists and reads neither an argument value nor result text, which is what
+keeps it inside the project's one invariant. It is off by default, and at the default `secret`
+floor it ends network access for the session on the first shell call and withholds the shell's
+own output. The atomic case — one call that reads and sends — is not closed by it, and no
+provenance design can close it. The behaviour with no declaration, and the `confidential` floor
+recipe that keeps the shell usable, are both covered in `tests/integration.spec.ts`. Neither
+has been exercised against the live harness yet.
+
 The asymmetry is worth stating precisely. `untrusted-no-egress` does not have this weakness,
 because an untrusted label is assigned from the tool **name**, which is classification data
 rather than an argument. The exfiltration chain has the hole. The injection chain does not.
@@ -287,6 +299,12 @@ and cannot do:
   matches, and the reason string is byte for byte the one this plugin composed. An
   uncorrelated approval grants nothing, and the cost of failing to attribute is a second
   question rather than a wrongly cleared label.
+- Opaque readers, as the opt-in partial mitigation for the shell hole the end-to-end run
+  reproduced. The floor is joined rather than assigned, so it can only raise a label: a result
+  that already matched a secret glob keeps its glob, and one that arrived `untrusted` stays
+  `untrusted`. The floor is applied in the one function both the live result gate and the
+  replay path share, so a result is labelled the same whether it is judged live or rebuilt from
+  the log. The tool list is empty by default.
 - The evidence sinks: hash-chained JSONL, and OpenTelemetry span events.
 - The provider backstop at `llm/stream`, armed only by a `provider` boundary `redact` rule.
   There is no `backstop.enabled` key, and writing one fails the load with a message naming the

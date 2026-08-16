@@ -44,6 +44,17 @@ end against `@deepseek-ai/dsh` `0.1.0-rc.6`, driven by `deepseek-v4-flash:previe
   whose boundary and effect pair no seam can enforce is refused at load.
 - **Capability classes**, with `run_code` and every `mcp__*` tool classified conservatively,
   and shells classified as `egress` as well as `mutate`.
+- **Opaque readers**, the opt-in partial mitigation for the shell hole below. An operator
+  declares that a named tool reads through a surface this plugin cannot inspect, and every
+  result that tool produces then carries a label floor joined into the ordinary lattice, so the
+  shell call after a shell read meets the ordinary `secret-no-egress` denial. The declaration is
+  about the tool and never about the command: it is evaluated against the registered tool name
+  before any model output exists and reads no argument value and no result text. The tool list
+  is empty by default, because the cost is severe: at the default `secret` floor the first
+  shell call ends network access for the session and the shell's own output is withheld from
+  the model. A `confidential` floor with a matching egress rule keeps the shell usable, and it
+  is the first documented use of the `confidential` level. It does not close the atomic case,
+  where one call both reads and sends, and no provenance design can.
 - **Configuration**, merged from the built-in defaults, then a workspace policy file, then
   the mount config. Every key, value, and shape is validated, and anything unrecognised fails
   the plugin load rather than silently disabling a rule.
@@ -87,8 +98,9 @@ end against `@deepseek-ai/dsh` `0.1.0-rc.6`, driven by `deepseek-v4-flash:previe
   is judged against a context in which no read has happened. Both were reproduced end to end
   with the plugin mounted. This is a boundary of the design rather than a defect: labelling a
   shell read would require parsing the command string. The `untrusted` to egress half is not
-  affected, because an untrusted label comes from the tool name. See the README for the
-  mitigations that work.
+  affected, because an untrusted label comes from the tool name. Opaque readers close the
+  sequential case when an operator opts in and accepts the cost; nothing closes the atomic
+  case. See the README for the mitigations that work.
 - The mount requires `inject: [tools]`. Without it the whole plugin tree fails to load, so the
   plugin's documented "no tool runtime, warn and return" path is unreachable in a real
   composition. Cordis throws on an undeclared service access before the defensive read runs.
