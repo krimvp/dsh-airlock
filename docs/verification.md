@@ -6,10 +6,57 @@ This file records what was checked against the harness source before any code wa
 what was later checked against a running harness, and where both the proposal and this
 project's own documentation turned out to be wrong.
 
-Source claims are verified against `deepseek-ai/deepseek-harness` at `0.1.0-rc.5`.
+Source claims are verified against `deepseek-ai/deepseek-harness` at `0.1.0-rc.6`.
 Runtime claims are verified against `@deepseek-ai/dsh` `0.1.0-rc.6`, driven by
 `deepseek-v4-flash:preview` over Ollama Cloud. See [Verified against a running
 harness](#verified-against-a-running-harness).
+
+Every source claim was first checked at `0.1.0-rc.5` and then re-checked at `0.1.0-rc.6`.
+No seam this plugin depends on changed between the two releases. The re-check found no
+difference in any type, any event name, any event payload field, any enforcement throw, or
+any registered tool name. No plugin code changed as a result.
+
+### Evidence basis for the 0.1.0-rc.6 re-check
+
+The two releases were read from different kinds of artifact, and the difference bounds what
+the rc.6 attribution below means.
+
+The rc.5 reading was a git clone of `deepseek-harness` with the full `packages/*/src` tree,
+so it could cite a file and a line.
+
+The rc.6 reading is the published npm packages: `@deepseek-ai/dsh-tools`, `dsh-session`,
+`dsh-llm`, `dsh-agent`, `dsh-agent-loop`, `dsh-user-approval`, `dsh-tool-fs`,
+`dsh-tool-fs-search`, `dsh-tool-bash`, `dsh-tool-pwsh`, `dsh-tool-terminal`, `dsh-tool-web`,
+`dsh-mcp-client`, and `dsh-tool-cordis`, each at `0.1.0-rc.6`. Each package ships three
+useful things: the emitted declarations under `lib/types/*.d.ts`, the compiled
+implementation under `lib/*.js`, and the package `README.md`. Every rc.6 confirmation below
+was read out of one of those three.
+
+Two limits follow, and both are stated because a reader who discovers them later has learned
+that the other claims are unverified too.
+
+**The published packages do not ship TypeScript source.** Each `exports` map advertises a
+`./src/*` subpath, but the `files` list omits `src`, so no tarball contains it. The advertised
+subpath resolves to nothing. Declarations and compiled output carry every claim checked here,
+so nothing below rests on source that was unavailable, but a reader cannot re-derive a
+repository line number from an npm install.
+
+**The repository line numbers below are rc.5 coordinates.** They were not re-checked at
+rc.6, because the file they index is not published. What was re-checked at rc.6 is the
+content at each citation, against the corresponding declaration, compiled function, or
+README sentence. A citation of the form `packages/llm/llm/src/invariant.ts:36-84` therefore
+names where the rule lives in the source tree and where it was first read, not a line this
+project confirmed at rc.6.
+
+The harness repository publishes no git tags. `git fetch --tags` and `git ls-remote --tags`
+both return an empty set, so an `0.1.0-rc.6` tag could not be used as a cross-check. The
+npm registry is the only version-pinned source of harness code this project can reach.
+
+Two facts make the null result trustworthy rather than merely unrefuted. The package
+`README.md` of every seam-bearing package — `dsh-tools`, `dsh-session`, `dsh-llm`,
+`dsh-agent`, `dsh-agent-loop`, and `dsh-user-approval` — is byte for byte identical between
+the rc.5 clone and the rc.6 tarball. The rc.5 clone's own `package.json` files declare
+`0.1.0-rc.5`, so the two readings really are of different releases.
 
 ## Confirmed
 
@@ -80,6 +127,32 @@ plugin, bounded and session-scoped, because the harness will not keep it.
 tool arguments — an answerer sees the agent, the tool name, the optional call id, and the
 `reason` string. The reason string must therefore be self-contained, which is why the ask
 message names the rule, the label, and the origin event in full.
+
+#### The two audit events declassification correlates
+
+This pair is the most fragile dependency in the plugin. `declassify.ts` learns how a human
+answered by matching one durable event to another, so a renamed event or a renamed field
+would not fail loudly. It would stop granting clearance and leave no signal that it had.
+The names and the payload shapes were therefore re-read in full at `0.1.0-rc.6`, in
+`@deepseek-ai/dsh-user-approval` `lib/types/index.d.ts`:
+
+```ts
+'approval/asked': { id: ApprovalRequestId; toolName: string; callId?: CallId; reason?: string }
+'approval/decided': { id: ApprovalRequestId; outcome: ApprovalOutcome }
+```
+
+Both event names are unchanged. All six fields are unchanged in name, type, and optionality.
+The declaration is byte for byte identical to the rc.5 source, including its doc comment.
+Both events remain log-only audit records that carry no `surfaceOp`, so folding them cannot
+disturb the surface the ledger reads. Exactly one `approval/decided` still follows each
+`approval/asked` with the same `id`. The correlation `declassify.ts` performs is therefore
+sound at rc.6, and no change was needed.
+
+`ApprovalOutcome` is likewise unchanged: `allowed-once`, `rejected`, `cancelled`, and
+`unavailable`. The rc.6 service exposes `request`, `setPolicy`, `overrideOf`,
+`effectiveApprovalPolicy`, and `setApprovalPolicy`, and nothing else. There is still no
+allow-always, no grant store, and no revocation API, which is what keeps `declassify.ts`
+necessary.
 
 ### `agent/pre-step`
 
@@ -293,7 +366,7 @@ and cannot do:
 - Declassification, as a bounded session-scoped store consulted by every gate, and now
   recorded as well as read. The grant is derived by correlating the durable `approval/asked`
   and `approval/decided` events the approval service appends to the session log
-  (`packages/interaction/user-approval/src/index.ts` at 0.1.0-rc.5), on the same
+  (`packages/interaction/user-approval/src/index.ts` at 0.1.0-rc.6), on the same
   `session/event` listener the ledger folds. Three facts must agree before an approval is
   claimed: the call id names a call this plugin asked about in this session, the tool name
   matches, and the reason string is byte for byte the one this plugin composed. An

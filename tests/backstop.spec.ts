@@ -96,7 +96,7 @@ async function collect(stream: AsyncIterable<StreamChunk>): Promise<StreamChunk[
 /**
  * Enforce the harness's stream grammar over a chunk run.
  *
- * This mirrors `packages/llm/llm/src/invariant.ts:36-84` at 0.1.0-rc.5. A
+ * This mirrors `packages/llm/llm/src/invariant.ts:36-84` at 0.1.0-rc.6. A
  * short-circuit that fails here would reach a consumer's switch as a chunk the
  * union does not describe.
  */

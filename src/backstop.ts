@@ -31,7 +31,7 @@
  * Enabling it therefore requires `enabled: true` from the caller. A policy that
  * does not say so leaves every request untouched.
  *
- * Verified against dsh 0.1.0-rc.5. The waterfall signature and the
+ * Verified against dsh 0.1.0-rc.6. The waterfall signature and the
  * short-circuit sanction are at `packages/llm/llm/src/index.ts:64`, the
  * deep-freeze of a loop-built request at
  * `packages/core/agent-loop/src/agent.ts:486-494`, the fact that middleware
@@ -250,8 +250,10 @@ export function shouldBlockRequest(
  * The chunks are a complete, valid run of the harness's stream protocol: one
  * text block opened, filled, and closed, then the terminal `finish`. The
  * grammar the harness enforces is in `packages/llm/llm/src/invariant.ts:36-84`
- * and the union itself is `packages/llm/llm/src/types.ts:291-303`, both at
- * 0.1.0-rc.5. A `finish` reason of `stop` is used rather than `error`, because
+ * and the union itself is `packages/llm/llm/src/types.ts:291-303`, both line
+ * numbers read at 0.1.0-rc.5. Both were re-read at 0.1.0-rc.6, in the published
+ * `dsh-llm` package's `lib/invariant.js` and `lib/types/types.d.ts`, and both
+ * are unchanged. A `finish` reason of `stop` is used rather than `error`, because
  * the request was refused rather than failed: the loop ends the turn with an
  * ordinary assistant message, and that message is appended to the log like any
  * other, so the model-visible text and the log still agree.

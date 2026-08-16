@@ -8,7 +8,7 @@
  *
  * The harness grants nothing durable. `ctx.approval` has `allowed-once` and no
  * `allow-always`, no remembered rule, and no grant store (verified against
- * `packages/interaction/user-approval/README.md` at 0.1.0-rc.5). A plugin that
+ * `packages/interaction/user-approval/README.md` at 0.1.0-rc.6). A plugin that
  * wants a clearance to outlive one call therefore keeps its own store, which is
  * this module.
  *
@@ -496,7 +496,8 @@ function composeKey(sessionId: string, id: string): string {
  * appends to the session log, `approval/asked` and `approval/decided`, which
  * reach the same `session/event` listener the ledger folds
  * (verified against `packages/interaction/user-approval/src/index.ts` at
- * 0.1.0-rc.5).
+ * 0.1.0-rc.6). Both event names, and every field this module reads from them,
+ * were re-read at 0.1.0-rc.6 and are unchanged.
  *
  * ## Attribution
  *

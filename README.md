@@ -4,7 +4,7 @@ Provenance-gated tool use for [DeepSeek Harness](https://github.com/deepseek-ai/
 
 > **Status: 0.1.0.**
 > The plugin labels context by origin and enforces rules over those labels at five seams.
-> The seam claims are verified against dsh `0.1.0-rc.5`, which warns of compatibility-breaking changes.
+> The seam claims are verified against dsh `0.1.0-rc.6`, which warns of compatibility-breaking changes.
 > The behaviour is verified end to end against dsh `0.1.0-rc.6`. See [Verified end to end](#verified-end-to-end).
 > Expect breaking changes while the harness is a release candidate.
 >
@@ -705,6 +705,27 @@ as coverage it does not have.
 
 Run it with `OLLAMA_API_KEY=... e2e/verify.sh`. See [e2e/README.md](./e2e/README.md) for the
 scenarios, the fixture safety argument, and how the arms are kept one file apart.
+
+### How the seam claims are checked against a version
+
+The seam claims and the end-to-end run are now pinned to the same release, `0.1.0-rc.6`.
+Every seam claim was first read at `0.1.0-rc.5` and then re-read at `0.1.0-rc.6`. Nothing
+this plugin depends on changed between the two. No type, no event name, no event payload
+field, no enforcement throw, and no registered tool name differs, and no plugin code changed
+as a result.
+
+One limit on that re-check is worth stating. The published harness packages do not ship
+TypeScript source. Each `exports` map advertises a `./src/*` subpath, but the `files` list
+omits `src`, so an install cannot serve it. The `0.1.0-rc.6` reading is therefore the emitted
+declarations, the compiled implementations, and the package READMEs, which together carry
+every claim checked. The repository line numbers in
+[docs/verification.md](./docs/verification.md) remain `0.1.0-rc.5` coordinates, because the
+files they index are not published. The content at each was re-verified; the line number was
+not.
+
+The harness repository publishes no git tags, so an `0.1.0-rc.6` tag could not be used as a
+second source. The npm registry is the only version-pinned harness code this project can
+reach.
 
 ## Limitations, stated plainly
 

@@ -23,7 +23,7 @@
  * of a message rather than from its text. No branch in this file inspects
  * content; see AGENTS.md.
  *
- * Verified against dsh 0.1.0-rc.5. The waterfall signature is in the API
+ * Verified against dsh 0.1.0-rc.6. The waterfall signature is in the API
  * catalogue at `packages/extensions/tool-cordis/src/api-catalog.ts:2225`. The
  * default `next()` enters the claimed batch followed by the projected runtime
  * context, at `packages/core/agent-loop/src/agent.ts:234-240`, which is why

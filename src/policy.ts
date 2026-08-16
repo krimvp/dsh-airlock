@@ -4,7 +4,11 @@
  * A rule is written over a label and a capability class. No rule reads an
  * argument string, because an argument string is exactly what a model can
  * reformulate. The tool names below come from the harness tool catalogue
- * (`docs/tool-catalog.md` at 0.1.0-rc.5), not from a guess.
+ * (`docs/tool-catalog.md` at 0.1.0-rc.5), not from a guess. Each name was
+ * re-checked at 0.1.0-rc.6 against the `register` call that creates it, in the
+ * published `dsh-tool-fs`, `dsh-tool-fs-search`, `dsh-tool-bash`,
+ * `dsh-tool-pwsh`, `dsh-tool-terminal`, `dsh-tool-web`, and `dsh-tools`
+ * packages. Every name is unchanged.
  *
  * The policy is flat and declarative so that an operator can review it in a
  * pull request. A rule constrains four things and nothing else: the trust of

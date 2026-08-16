@@ -20,8 +20,9 @@
  * is the only way this plugin learns how a human answered its own ask, because
  * the harness resolves an ask after the whole `tools/pre-execute` waterfall has
  * returned. An `allowed-once` on a question this plugin raised becomes a
- * recorded clearance; see `declassify.ts`. Verified against dsh 0.1.0-rc.5 at
- * `packages/interaction/user-approval/src/index.ts`.
+ * recorded clearance; see `declassify.ts`. Verified against dsh 0.1.0-rc.6 at
+ * `packages/interaction/user-approval/src/index.ts`. Both event names and all
+ * six payload fields were re-read at 0.1.0-rc.6 and are unchanged.
  */
 
 import type { Context } from '@deepseek-ai/cordis'

@@ -150,7 +150,7 @@ function secretFile(): SessionEvent[] {
  * The durable audit pair the approval service appends around one question.
  *
  * Log-only events, exactly as `packages/interaction/user-approval/src/index.ts`
- * writes them at 0.1.0-rc.5. They reach `session/event` and never the model.
+ * writes them at 0.1.0-rc.6. They reach `session/event` and never the model.
  */
 function approvalPair(fields: {
   id: string

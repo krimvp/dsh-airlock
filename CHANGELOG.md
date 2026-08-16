@@ -8,9 +8,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## 0.1.0
 
 The first release. The seam claims are verified against `deepseek-ai/deepseek-harness` at
-`0.1.0-rc.5`, which warns of compatibility-breaking changes. The behaviour is verified end to
+`0.1.0-rc.6`, which warns of compatibility-breaking changes. The behaviour is verified end to
 end against `@deepseek-ai/dsh` `0.1.0-rc.6`, driven by `deepseek-v4-flash:preview`: 29 pass,
 0 fail, 2 weak, 1 gap.
+
+Every seam claim was first read at `0.1.0-rc.5` and then re-read at `0.1.0-rc.6` before this
+release. Nothing this plugin depends on changed between the two releases, and no plugin code
+changed as a result. The re-check covered the guard signature, the three decision unions, the
+approval outcome vocabulary, the `approval/asked` and `approval/decided` payloads, the
+surface replace rule, the `agent/pre-step` payload, the `llm/stream` signature and chunk
+grammar, every registered tool name, the MCP public name prefix, and `Agent.id`. The
+published packages ship no TypeScript source and the harness repository publishes no git
+tags, so the re-check read emitted declarations, compiled implementations, and package
+READMEs. `docs/verification.md` records what that bounds.
 
 ### Added
 

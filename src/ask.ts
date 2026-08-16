@@ -6,7 +6,7 @@
  * `{kind:'ask'}` and lets the harness service it: the registry resolves an ask
  * through `ctx.approval` after the whole waterfall has run, and degrades it to
  * a denial when no approval service is mounted or when the call carries no
- * agent (verified against `packages/core/tools/src/index.ts` at 0.1.0-rc.5).
+ * agent (verified against `packages/core/tools/src/index.ts` at 0.1.0-rc.6).
  * This module never calls approval itself.
  *
  * The approval request carries no tool arguments. An answerer sees the tool

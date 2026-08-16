@@ -457,7 +457,7 @@ function toolName(exec: ToolExecution | undefined): string {
  * `output.schema` and re-rendered, and this plugin cannot know that schema, so
  * a redaction that typechecks for one tool becomes an `INVALID_TOOL_OUTPUT`
  * failure for the next. `block` is the mechanism that is correct for every
- * tool, so `block` is the one used. Verified against dsh 0.1.0-rc.5.
+ * tool, so `block` is the one used. Verified against dsh 0.1.0-rc.6.
  *
  * A block discards the tool's own deferred `additionalContexts`, which is
  * intended: they are derived from content the policy just refused to release.

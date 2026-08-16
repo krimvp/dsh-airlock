@@ -1,7 +1,7 @@
 /*
  * Local structural copies of the dsh payload types.
  *
- * Source: https://github.com/deepseek-ai/deepseek-harness at 0.1.0-rc.5.
+ * Source: https://github.com/deepseek-ai/deepseek-harness at 0.1.0-rc.6.
  * The plugin declares no dsh package as a dependency, so the cordis `Events`
  * interface holds no dsh event and `ctx.tools` is not typed. `listen` and
  * `toolRuntime` cast once at that seam, and each caller declares the shape it
